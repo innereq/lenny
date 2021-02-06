@@ -1,3 +1,12 @@
+# Lemmy v0.9.6 Release (2021-02-05)
+
+## Changes
+
+- Fixed inbox_urls not being correctly set, which broke federation in `v0.9.5`. Added some logging to catch these.
+- Fixing community search not using auth.
+- Moved docs to https://join.lemmy.ml
+- Fixed an issue w/ lemmy-ui with forms being cleared out.
+
 # Lemmy v0.9.4 Pre-Release (2021-02-02)
 
 ## Changes
@@ -76,10 +85,10 @@ None of these are breaking changes, so federation between 0.9.0 and 0.8.11 will 
 
 ## Upgrading
 
-If you'd like to make a DB backup before upgrading, follow [this guide](https://lemmy.ml/docs/en/administration/backup_and_restore.html).
+If you'd like to make a DB backup before upgrading, follow [this guide](https://join.lemmy.ml/docs/en/administration/backup_and_restore.html).
 
-- [Upgrade with manual Docker installation](https://lemmy.ml/docs/en/administration/install_docker.html#updating)
-- [Upgrade with Ansible installation](https://lemmy.ml/docs/en/administration/install_ansible.html)
+- [Upgrade with manual Docker installation](https://join.lemmy.ml/docs/en/administration/install_docker.html#updating)
+- [Upgrade with Ansible installation](https://join.lemmy.ml/docs/en/administration/install_ansible.html)
 
 # Lemmy v0.8.0 Release (2020-10-16)
 
@@ -103,7 +112,7 @@ Here are some of the bigger changes:
 - The first **federation public beta release**, woohoo :fireworks: 
 - All Lemmy functionality now works over ActivityPub (except turning remote users into mods/admins)
 - Instance allowlist and blocklist
-- Documentation for [admins](https://lemmy.ml/docs/administration_federation.html) and [devs](https://lemmy.ml/docs/contributing_federation_overview.html) on how federation works
+- Documentation for [admins](https://join.lemmy.ml/docs/administration_federation.html) and [devs](https://join.lemmy.ml/docs/contributing_federation_overview.html) on how federation works
 - Upgraded to newest versions of @asonix activitypub libraries
 - Full local federation setup for manual testing
 - Automated testing for nearly every federation action
@@ -141,8 +150,8 @@ We'd also like to thank both the [NLnet foundation](https://nlnet.nl/) for their
 
 ## Upgrading
 
-- [with manual Docker installation](https://lemmy.ml/docs/administration_install_docker.html#updating)
-- [with Ansible installation](https://lemmy.ml/docs/administration_install_ansible.html)
+- [with manual Docker installation](https://join.lemmy.ml/docs/administration_install_docker.html#updating)
+- [with Ansible installation](https://join.lemmy.ml/docs/administration_install_ansible.html)
 
 ## Testing Federation
 
@@ -230,7 +239,7 @@ Overall, since our last major release in January (v0.6.0), we have closed over
 
 Before starting the upgrade, make sure that you have a working backup of your
 database and image files. See our
-[documentation](https://lemmy.ml/docs/administration_backup_and_restore.html)
+[documentation](https://join.lemmy.ml/docs/administration_backup_and_restore.html)
 for backup instructions.
 
 **With Ansible:**

@@ -99,6 +99,9 @@ table! {
         last_refreshed_at -> Timestamp,
         icon -> Nullable<Text>,
         banner -> Nullable<Text>,
+        followers_url -> Text,
+        inbox_url -> Text,
+        shared_inbox_url -> Nullable<Text>,
     }
 }
 
@@ -410,6 +413,8 @@ table! {
         last_refreshed_at -> Timestamp,
         banner -> Nullable<Text>,
         deleted -> Bool,
+        inbox_url -> Text,
+        shared_inbox_url -> Nullable<Text>,
     }
 }
 

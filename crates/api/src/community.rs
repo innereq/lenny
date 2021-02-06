@@ -9,7 +9,14 @@ use crate::{
 };
 use actix_web::web::Data;
 use anyhow::Context;
-use lemmy_apub::ActorType;
+use lemmy_apub::{
+  generate_apub_endpoint,
+  generate_followers_url,
+  generate_inbox_url,
+  generate_shared_inbox_url,
+  ActorType,
+  EndpointType,
+};
 use lemmy_db_queries::{
   diesel_option_overwrite,
   source::{
@@ -38,7 +45,7 @@ use lemmy_db_views_actor::{
 };
 use lemmy_structs::{blocking, community::*};
 use lemmy_utils::{
-  apub::{generate_actor_keypair, make_apub_endpoint, EndpointType},
+  apub::generate_actor_keypair,
   location_info,
   utils::{is_valid_community_name, naive_from_unix},
   APIError,
@@ -133,10 +140,10 @@ impl Perform for CreateCommunity {
     }
 
     // Double check for duplicate community actor_ids
-    let actor_id = make_apub_endpoint(EndpointType::Community, &data.name);
-    let actor_id_cloned = actor_id.to_owned();
+    let community_actor_id = generate_apub_endpoint(EndpointType::Community, &data.name)?;
+    let actor_id_cloned = community_actor_id.to_owned();
     let community_dupe = blocking(context.pool(), move |conn| {
-      Community::read_from_apub_id(conn, &actor_id_cloned.into())
+      Community::read_from_apub_id(conn, &actor_id_cloned)
     })
     .await?;
     if community_dupe.is_ok() {
@@ -165,12 +172,15 @@ impl Perform for CreateCommunity {
       deleted: None,
       nsfw: data.nsfw,
       updated: None,
-      actor_id: Some(actor_id.into()),
+      actor_id: Some(community_actor_id.to_owned()),
       local: true,
       private_key: Some(keypair.private_key),
       public_key: Some(keypair.public_key),
       last_refreshed_at: None,
       published: None,
+      followers_url: Some(generate_followers_url(&community_actor_id)?),
+      inbox_url: Some(generate_inbox_url(&community_actor_id)?),
+      shared_inbox_url: Some(Some(generate_shared_inbox_url(&community_actor_id)?)),
     };
 
     let inserted_community = match blocking(context.pool(), move |conn| {
@@ -268,6 +278,9 @@ impl Perform for EditCommunity {
       public_key: read_community.public_key,
       last_refreshed_at: None,
       published: None,
+      followers_url: None,
+      inbox_url: None,
+      shared_inbox_url: None,
     };
 
     let community_id = data.community_id;
