@@ -2,7 +2,6 @@ use actix_web::{error::ErrorBadRequest, *};
 use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use diesel::PgConnection;
-use lemmy_api::claims::Claims;
 use lemmy_db_queries::{
   source::{community::Community_, user::User},
   ListingType,
@@ -16,7 +15,7 @@ use lemmy_db_views::{
 };
 use lemmy_db_views_actor::user_mention_view::{UserMentionQueryBuilder, UserMentionView};
 use lemmy_structs::blocking;
-use lemmy_utils::{settings::Settings, utils::markdown_to_html, LemmyError};
+use lemmy_utils::{claims::Claims, settings::Settings, utils::markdown_to_html, LemmyError};
 use lemmy_websocket::LemmyContext;
 use rss::{
   extension::dublincore::DublinCoreExtensionBuilder,
@@ -377,6 +376,7 @@ fn create_post_items(posts: Vec<PostView>) -> Result<Vec<Item>, LemmyError> {
       Settings::get().get_protocol_and_hostname(),
       p.post.id
     );
+    i.link(post_url.to_owned());
     i.comments(post_url.to_owned());
     let guid = GuidBuilder::default()
       .permalink(true)
@@ -394,10 +394,6 @@ fn create_post_items(posts: Vec<PostView>) -> Result<Vec<Item>, LemmyError> {
     // TODO: for category we should just put the name of the category, but then we would have
     //       to read each community from the db
 
-    if let Some(url) = p.post.url {
-      i.link(url);
-    }
-
     // TODO add images
     let mut description = format!("submitted by <a href=\"{}\">{}</a> to <a href=\"{}\">{}</a><br>{} points | <a href=\"{}\">{} comments</a>",
     p.creator.actor_id,
@@ -407,6 +403,12 @@ fn create_post_items(posts: Vec<PostView>) -> Result<Vec<Item>, LemmyError> {
     p.counts.score,
     post_url,
     p.counts.comments);
+
+    // If its a url post, add it to the description
+    if let Some(url) = p.post.url {
+      let link_html = format!("<br><a href=\"{url}\">{url}</a>", url = url);
+      description.push_str(&link_html);
+    }
 
     if let Some(body) = p.post.body {
       let html = markdown_to_html(&body);

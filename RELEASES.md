@@ -1,3 +1,34 @@
+# Lemmy v0.9.8 Release (2021-02-19)
+
+## Changes
+
+### Lemmy backend
+- Added an federated activity query sorting order.
+- Explicitly marking posts and comments as public.
+- Added a `NewComment` / forum sort for posts.
+- Fixed an issue with not setting correct published time for fetched posts.
+- Fixed an issue with an open docker port on lemmy-ui.
+- Using lemmy post link for RSS link.
+- Fixed reason and display name lengths to use char counts instead.
+
+### Lemmy-ui
+
+- Updated translations.
+- Made websocket host configurable.
+- Added some accessibility features.
+- Always showing password reset link.
+
+# Lemmy v0.9.7 Release (2021-02-08)
+
+## Changes
+
+- Posts and comments are no longer live-sorted (meaning most content should stay in place).
+- Fixed an issue with the create post title field not expanding when copied from iframely suggestion.
+- Fixed broken federated community paging / sorting.
+- Added aria attributes for accessibility, thx to @Mitch Lillie.
+- Updated translations and added croatian.
+- No changes to lemmy back-end.
+
 # Lemmy v0.9.6 Release (2021-02-05)
 
 ## Changes
