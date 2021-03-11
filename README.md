@@ -1,3 +1,5 @@
+**NOTE:** this project is maintained in @commagray's spare time. It's not well tested nor used, better to fork it.
+
 <p align="center">
   <img width=200px height=200px src="https://raw.githubusercontent.com/innereq/lenny-ui/downstream/src/assets/icons/favicon.svg">
   <h3 align="center">( ͡° ͜ʖ ͡°)</h3>
