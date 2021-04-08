@@ -10,7 +10,7 @@ use lemmy_apub::{generate_apub_endpoint, ApubObjectType, EndpointType};
 use lemmy_db_queries::{source::private_message::PrivateMessage_, Crud};
 use lemmy_db_schema::source::private_message::{PrivateMessage, PrivateMessageForm};
 use lemmy_db_views::{local_user_view::LocalUserView, private_message_view::PrivateMessageView};
-use lemmy_utils::{utils::remove_slurs, ApiError, ConnectionId, LemmyError};
+use lemmy_utils::{utils::fake_remove_slurs, ApiError, ConnectionId, LemmyError};
 use lemmy_websocket::{messages::SendUserRoomMessage, LemmyContext, UserOperationCrud};
 
 #[async_trait::async_trait(?Send)]
@@ -25,10 +25,10 @@ impl PerformCrud for CreatePrivateMessage {
     let data: &CreatePrivateMessage = &self;
     let local_user_view = get_local_user_view_from_jwt(&data.auth, context.pool()).await?;
 
-    let content_slurs_removed = remove_slurs(&data.content.to_owned());
+    let fake_content_slurs_removed = fake_remove_slurs(&data.content.to_owned());
 
     let private_message_form = PrivateMessageForm {
-      content: content_slurs_removed.to_owned(),
+      content: fake_content_slurs_removed.to_owned(),
       creator_id: local_user_view.person.id,
       recipient_id: data.recipient_id,
       ..PrivateMessageForm::default()
@@ -90,7 +90,7 @@ impl PerformCrud for CreatePrivateMessage {
         &local_recipient,
         "Private Message from",
         "Private Message",
-        &content_slurs_removed,
+        &fake_content_slurs_removed,
       );
 
       let local_recipient_id = local_recipient.local_user.id;

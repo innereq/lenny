@@ -9,7 +9,7 @@ use lemmy_apub::ApubObjectType;
 use lemmy_db_queries::{source::private_message::PrivateMessage_, Crud};
 use lemmy_db_schema::source::private_message::PrivateMessage;
 use lemmy_db_views::{local_user_view::LocalUserView, private_message_view::PrivateMessageView};
-use lemmy_utils::{utils::remove_slurs, ApiError, ConnectionId, LemmyError};
+use lemmy_utils::{utils::fake_remove_slurs, ApiError, ConnectionId, LemmyError};
 use lemmy_websocket::{messages::SendUserRoomMessage, LemmyContext, UserOperationCrud};
 
 #[async_trait::async_trait(?Send)]
@@ -35,10 +35,10 @@ impl PerformCrud for EditPrivateMessage {
     }
 
     // Doing the update
-    let content_slurs_removed = remove_slurs(&data.content);
+    let fake_content_slurs_removed = fake_remove_slurs(&data.content);
     let private_message_id = data.private_message_id;
     let updated_private_message = match blocking(context.pool(), move |conn| {
-      PrivateMessage::update_content(conn, private_message_id, &content_slurs_removed)
+      PrivateMessage::update_content(conn, private_message_id, &fake_content_slurs_removed)
     })
     .await?
     {

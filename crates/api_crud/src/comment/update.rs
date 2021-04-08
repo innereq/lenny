@@ -12,7 +12,7 @@ use lemmy_db_queries::source::comment::Comment_;
 use lemmy_db_schema::source::comment::*;
 use lemmy_db_views::comment_view::CommentView;
 use lemmy_utils::{
-  utils::{remove_slurs, scrape_text_for_mentions},
+  utils::{fake_remove_slurs, scrape_text_for_mentions},
   ApiError,
   ConnectionId,
   LemmyError,
@@ -50,10 +50,10 @@ impl PerformCrud for EditComment {
     }
 
     // Do the update
-    let content_slurs_removed = remove_slurs(&data.content.to_owned());
+    let fake_content_slurs_removed = fake_remove_slurs(&data.content.to_owned());
     let comment_id = data.comment_id;
     let updated_comment = match blocking(context.pool(), move |conn| {
-      Comment::update_content(conn, comment_id, &content_slurs_removed)
+      Comment::update_content(conn, comment_id, &fake_content_slurs_removed)
     })
     .await?
     {

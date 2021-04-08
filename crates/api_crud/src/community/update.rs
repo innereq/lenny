@@ -16,7 +16,6 @@ use lemmy_db_views_actor::{
   community_view::CommunityView,
 };
 use lemmy_utils::{
-  utils::{check_slurs, check_slurs_opt},
   ApiError,
   ConnectionId,
   LemmyError,
@@ -34,9 +33,6 @@ impl PerformCrud for EditCommunity {
   ) -> Result<CommunityResponse, LemmyError> {
     let data: &EditCommunity = &self;
     let local_user_view = get_local_user_view_from_jwt(&data.auth, context.pool()).await?;
-
-    check_slurs(&data.title)?;
-    check_slurs_opt(&data.description)?;
 
     // Verify its a mod (only mods can edit it)
     let community_id = data.community_id;

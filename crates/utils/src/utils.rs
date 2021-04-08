@@ -1,4 +1,4 @@
-use crate::{settings::structs::Settings, ApiError, IpAddr};
+use crate::{settings::structs::Settings, IpAddr};
 use actix_web::dev::ConnectionInfo;
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use itertools::Itertools;

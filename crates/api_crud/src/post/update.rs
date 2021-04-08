@@ -7,7 +7,7 @@ use lemmy_db_schema::{naive_now, source::post::*};
 use lemmy_db_views::post_view::PostView;
 use lemmy_utils::{
   request::fetch_iframely_and_pictrs_data,
-  utils::{check_slurs, check_slurs_opt, is_valid_post_title},
+  utils::is_valid_post_title,
   ApiError,
   ConnectionId,
   LemmyError,
@@ -25,9 +25,6 @@ impl PerformCrud for EditPost {
   ) -> Result<PostResponse, LemmyError> {
     let data: &EditPost = &self;
     let local_user_view = get_local_user_view_from_jwt(&data.auth, context.pool()).await?;
-
-    check_slurs(&data.name)?;
-    check_slurs_opt(&data.body)?;
 
     if !is_valid_post_title(&data.name) {
       return Err(ApiError::err("invalid_post_title").into());

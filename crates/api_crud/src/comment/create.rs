@@ -13,7 +13,7 @@ use lemmy_db_queries::{source::comment::Comment_, Crud, Likeable};
 use lemmy_db_schema::source::comment::*;
 use lemmy_db_views::comment_view::CommentView;
 use lemmy_utils::{
-  utils::{remove_slurs, scrape_text_for_mentions},
+  utils::{fake_remove_slurs, scrape_text_for_mentions},
   ApiError,
   ConnectionId,
   LemmyError,
@@ -32,7 +32,7 @@ impl PerformCrud for CreateComment {
     let data: &CreateComment = &self;
     let local_user_view = get_local_user_view_from_jwt(&data.auth, context.pool()).await?;
 
-    let content_slurs_removed = remove_slurs(&data.content.to_owned());
+    let fake_content_slurs_removed = fake_remove_slurs(&data.content.to_owned());
 
     // Check for a community ban
     let post_id = data.post_id;
@@ -59,7 +59,7 @@ impl PerformCrud for CreateComment {
     }
 
     let comment_form = CommentForm {
-      content: content_slurs_removed,
+      content: fake_content_slurs_removed,
       parent_id: data.parent_id.to_owned(),
       post_id: data.post_id,
       creator_id: local_user_view.person.id,
