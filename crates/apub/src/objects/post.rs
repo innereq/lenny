@@ -1,13 +1,14 @@
 use crate::{
+  check_is_apub_id_valid,
   extensions::{context::lemmy_context, page_extension::PageExtension},
-  fetcher::user::get_or_fetch_and_upsert_user,
+  fetcher::person::get_or_fetch_and_upsert_person,
   objects::{
     check_object_domain,
     check_object_for_community_or_site_ban,
     create_tombstone,
+    get_community_from_to_or_cc,
     get_object_from_apub,
     get_source_markdown_value,
-    get_to_community,
     set_content_and_source,
     FromApub,
     FromApubToForm,
@@ -22,13 +23,16 @@ use activitystreams::{
 };
 use activitystreams_ext::Ext1;
 use anyhow::Context;
+use lemmy_api_common::blocking;
 use lemmy_db_queries::{Crud, DbPool};
-use lemmy_db_schema::source::{
-  community::Community,
-  post::{Post, PostForm},
-  user::User_,
+use lemmy_db_schema::{
+  self,
+  source::{
+    community::Community,
+    person::Person,
+    post::{Post, PostForm},
+  },
 };
-use lemmy_structs::blocking;
 use lemmy_utils::{
   location_info,
   request::fetch_iframely_and_pictrs_data,
@@ -47,7 +51,7 @@ impl ToApub for Post {
     let mut page = ApObject::new(Page::new());
 
     let creator_id = self.creator_id;
-    let creator = blocking(pool, move |conn| User_::read(conn, creator_id)).await??;
+    let creator = blocking(pool, move |conn| Person::read(conn, creator_id)).await??;
 
     let community_id = self.community_id;
     let community = blocking(pool, move |conn| Community::read(conn, community_id)).await??;
@@ -58,8 +62,9 @@ impl ToApub for Post {
       // https://git.asonix.dog/Aardwolf/activitystreams/issues/5
       .set_many_contexts(lemmy_context()?)
       .set_id(self.ap_id.to_owned().into_inner())
-      // Use summary field to be consistent with mastodon content warning.
-      // https://mastodon.xyz/@Louisa/103987265222901387.json
+      .set_name(self.name.to_owned())
+      // `summary` field for compatibility with lemmy v0.9.9 and older,
+      // TODO: remove this after some time
       .set_summary(self.name.to_owned())
       .set_published(convert_datetime(self.published))
       .set_many_tos(vec![community.actor_id.into_inner(), public()])
@@ -69,16 +74,13 @@ impl ToApub for Post {
       set_content_and_source(&mut page, &body)?;
     }
 
-    // TODO: hacky code because we get self.url == Some("")
-    // https://github.com/LemmyNet/lemmy/issues/602
-    let url = self.url.as_ref().filter(|u| !u.is_empty());
-    if let Some(u) = url {
-      page.set_url(Url::parse(u)?);
+    if let Some(url) = &self.url {
+      page.set_url::<Url>(url.to_owned().into());
     }
 
     if let Some(thumbnail_url) = &self.thumbnail_url {
       let mut image = Image::new();
-      image.set_url(Url::parse(thumbnail_url)?);
+      image.set_url::<Url>(thumbnail_url.to_owned().into());
       page.set_image(image.into_any_base()?);
     }
 
@@ -116,9 +118,19 @@ impl FromApub for Post {
     context: &LemmyContext,
     expected_domain: Url,
     request_counter: &mut i32,
+    mod_action_allowed: bool,
   ) -> Result<Post, LemmyError> {
-    check_object_for_community_or_site_ban(page, context, request_counter).await?;
-    get_object_from_apub(page, context, expected_domain, request_counter).await
+    let post: Post = get_object_from_apub(
+      page,
+      context,
+      expected_domain,
+      request_counter,
+      mod_action_allowed,
+    )
+    .await?;
+    check_object_for_community_or_site_ban(page, post.community_id, context, request_counter)
+      .await?;
+    Ok(post)
   }
 }
 
@@ -129,7 +141,15 @@ impl FromApubToForm<PageExt> for PostForm {
     context: &LemmyContext,
     expected_domain: Url,
     request_counter: &mut i32,
+    mod_action_allowed: bool,
   ) -> Result<PostForm, LemmyError> {
+    let ap_id = if mod_action_allowed {
+      let id = page.id_unchecked().context(location_info!())?;
+      check_is_apub_id_valid(id)?;
+      id.to_owned().into()
+    } else {
+      check_object_domain(page, expected_domain)?
+    };
     let ext = &page.ext_one;
     let creator_actor_id = page
       .inner
@@ -139,11 +159,12 @@ impl FromApubToForm<PageExt> for PostForm {
       .as_single_xsd_any_uri()
       .context(location_info!())?;
 
-    let creator = get_or_fetch_and_upsert_user(creator_actor_id, context, request_counter).await?;
+    let creator =
+      get_or_fetch_and_upsert_person(creator_actor_id, context, request_counter).await?;
 
-    let community = get_to_community(page, context, request_counter).await?;
+    let community = get_community_from_to_or_cc(page, context, request_counter).await?;
 
-    let thumbnail_url = match &page.inner.image() {
+    let thumbnail_url: Option<Url> = match &page.inner.image() {
       Some(any_image) => Image::from_any_base(
         any_image
           .to_owned()
@@ -155,7 +176,7 @@ impl FromApubToForm<PageExt> for PostForm {
       .url()
       .context(location_info!())?
       .as_single_xsd_any_uri()
-      .map(|u| u.to_string()),
+      .map(|url| url.to_owned()),
       None => None,
     };
     let url = page
@@ -163,29 +184,36 @@ impl FromApubToForm<PageExt> for PostForm {
       .url()
       .map(|u| u.as_single_xsd_any_uri())
       .flatten()
-      .map(|s| s.to_string());
+      .map(|u| u.to_owned());
 
     let (iframely_title, iframely_description, iframely_html, pictrs_thumbnail) =
       if let Some(url) = &url {
-        fetch_iframely_and_pictrs_data(context.client(), Some(url.to_owned())).await
+        fetch_iframely_and_pictrs_data(context.client(), Some(url)).await
       } else {
         (None, None, None, thumbnail_url)
       };
 
     let name = page
       .inner
-      .summary()
-      .as_ref()
+      .name()
+      // The following is for compatibility with lemmy v0.9.9 and older
+      // TODO: remove it after some time (along with the map above)
+      .or_else(|| page.inner.summary())
       .context(location_info!())?
       .as_single_xsd_string()
       .context(location_info!())?
       .to_string();
     let body = get_source_markdown_value(page)?;
 
+    // TODO: expected_domain is wrong in this case, because it simply takes the domain of the actor
+    //       maybe we need to take id_unchecked() if the activity is from community to user?
+    //       why did this work before? -> i dont think it did?
+    //       -> try to make expected_domain optional and set it null if it is a mod action
+
     let fake_body_slurs_removed = body.map(|b| fake_remove_slurs(&b));
     Ok(PostForm {
       name,
-      url,
+      url: url.map(|u| u.into()),
       body: fake_body_slurs_removed,
       creator_id: creator.id,
       community_id: community.id,
@@ -207,9 +235,9 @@ impl FromApubToForm<PageExt> for PostForm {
       embed_title: iframely_title,
       embed_description: iframely_description,
       embed_html: iframely_html,
-      thumbnail_url: pictrs_thumbnail,
-      ap_id: Some(check_object_domain(page, expected_domain)?),
-      local: false,
+      thumbnail_url: pictrs_thumbnail.map(|u| u.into()),
+      ap_id: Some(ap_id),
+      local: Some(false),
     })
   }
 }

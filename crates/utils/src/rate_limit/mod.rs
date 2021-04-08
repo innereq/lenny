@@ -1,6 +1,7 @@
 use crate::{
-  settings::{RateLimitConfig, Settings},
+  settings::structs::{RateLimitConfig, Settings},
   utils::get_ip,
+  IpAddr,
   LemmyError,
 };
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
@@ -62,7 +63,7 @@ impl RateLimit {
 impl RateLimited {
   pub async fn wrap<T, E>(
     self,
-    ip_addr: String,
+    ip_addr: IpAddr,
     fut: impl Future<Output = Result<T, E>>,
   ) -> Result<T, E>
   where
@@ -70,7 +71,7 @@ impl RateLimited {
   {
     // Does not need to be blocking because the RwLock in settings never held across await points,
     // and the operation here locks only long enough to clone
-    let rate_limit: RateLimitConfig = Settings::get().rate_limit;
+    let rate_limit: RateLimitConfig = Settings::get().rate_limit();
 
     // before
     {

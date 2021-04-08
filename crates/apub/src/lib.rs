@@ -5,48 +5,51 @@ pub mod activities;
 pub mod activity_queue;
 pub mod extensions;
 pub mod fetcher;
-pub mod http;
-pub mod inbox;
 pub mod objects;
-pub mod routes;
 
 use crate::extensions::{
-  group_extensions::GroupExtension,
+  group_extension::GroupExtension,
   page_extension::PageExtension,
+  person_extension::PersonExtension,
   signatures::{PublicKey, PublicKeyExtension},
 };
 use activitystreams::{
   activity::Follow,
-  actor::{ApActor, Group, Person},
+  actor,
   base::AnyBase,
-  object::{ApObject, Note, Page},
+  object::{ApObject, AsObject, Note, ObjectExt, Page},
 };
 use activitystreams_ext::{Ext1, Ext2};
 use anyhow::{anyhow, Context};
 use diesel::NotFound;
+use lemmy_api_common::blocking;
 use lemmy_db_queries::{source::activity::Activity_, ApubObject, DbPool};
-use lemmy_db_schema::source::{
-  activity::Activity,
-  comment::Comment,
-  community::Community,
-  post::Post,
-  private_message::PrivateMessage,
-  user::User_,
+use lemmy_db_schema::{
+  source::{
+    activity::Activity,
+    comment::Comment,
+    community::Community,
+    person::{Person as DbPerson, Person},
+    post::Post,
+    private_message::PrivateMessage,
+  },
+  CommunityId,
+  DbUrl,
 };
-use lemmy_structs::blocking;
-use lemmy_utils::{location_info, settings::Settings, LemmyError};
+use lemmy_db_views_actor::community_person_ban_view::CommunityPersonBanView;
+use lemmy_utils::{location_info, settings::structs::Settings, LemmyError};
 use lemmy_websocket::LemmyContext;
 use serde::Serialize;
 use std::net::IpAddr;
 use url::{ParseError, Url};
 
 /// Activitystreams type for community
-type GroupExt = Ext2<ApActor<ApObject<Group>>, GroupExtension, PublicKeyExtension>;
-/// Activitystreams type for user
-type PersonExt = Ext1<ApActor<ApObject<Person>>, PublicKeyExtension>;
+type GroupExt = Ext2<actor::ApActor<ApObject<actor::Group>>, GroupExtension, PublicKeyExtension>;
+/// Activitystreams type for person
+type PersonExt = Ext2<actor::ApActor<ApObject<actor::Person>>, PersonExtension, PublicKeyExtension>;
 /// Activitystreams type for post
-type PageExt = Ext1<ApObject<Page>, PageExtension>;
-type NoteExt = ApObject<Note>;
+pub type PageExt = Ext1<ApObject<Page>, PageExtension>;
+pub type NoteExt = ApObject<Note>;
 
 pub static APUB_JSON_CONTENT_TYPE: &str = "application/activity+json";
 
@@ -59,12 +62,12 @@ pub static APUB_JSON_CONTENT_TYPE: &str = "application/activity+json";
 /// - URL not being in the blocklist (if it is active)
 ///
 /// Note that only one of allowlist and blacklist can be enabled, not both.
-fn check_is_apub_id_valid(apub_id: &Url) -> Result<(), LemmyError> {
+pub fn check_is_apub_id_valid(apub_id: &Url) -> Result<(), LemmyError> {
   let settings = Settings::get();
   let domain = apub_id.domain().context(location_info!())?.to_string();
   let local_instance = settings.get_hostname_without_port()?;
 
-  if !settings.federation.enabled {
+  if !settings.federation().enabled {
     return if domain == local_instance {
       Ok(())
     } else {
@@ -88,22 +91,23 @@ fn check_is_apub_id_valid(apub_id: &Url) -> Result<(), LemmyError> {
     return Err(anyhow!("invalid apub id scheme {}: {}", apub_id.scheme(), apub_id).into());
   }
 
-  let mut allowed_instances = Settings::get().get_allowed_instances();
+  let allowed_instances = Settings::get().get_allowed_instances();
   let blocked_instances = Settings::get().get_blocked_instances();
-  if allowed_instances.is_empty() && blocked_instances.is_empty() {
+
+  if allowed_instances.is_none() && blocked_instances.is_none() {
     Ok(())
-  } else if !allowed_instances.is_empty() {
+  } else if let Some(mut allowed) = allowed_instances {
     // need to allow this explicitly because apub receive might contain objects from our local
     // instance. split is needed to remove the port in our federation test setup.
-    allowed_instances.push(local_instance);
+    allowed.push(local_instance);
 
-    if allowed_instances.contains(&domain) {
+    if allowed.contains(&domain) {
       Ok(())
     } else {
       Err(anyhow!("{} not in federation allowlist", domain).into())
     }
-  } else if !blocked_instances.is_empty() {
-    if blocked_instances.contains(&domain) {
+  } else if let Some(blocked) = blocked_instances {
+    if blocked.contains(&domain) {
       Err(anyhow!("{} is in federation blocklist", domain).into())
     } else {
       Ok(())
@@ -117,27 +121,41 @@ fn check_is_apub_id_valid(apub_id: &Url) -> Result<(), LemmyError> {
 /// and actors in Lemmy.
 #[async_trait::async_trait(?Send)]
 pub trait ApubObjectType {
-  async fn send_create(&self, creator: &User_, context: &LemmyContext) -> Result<(), LemmyError>;
-  async fn send_update(&self, creator: &User_, context: &LemmyContext) -> Result<(), LemmyError>;
-  async fn send_delete(&self, creator: &User_, context: &LemmyContext) -> Result<(), LemmyError>;
+  async fn send_create(&self, creator: &DbPerson, context: &LemmyContext)
+    -> Result<(), LemmyError>;
+  async fn send_update(&self, creator: &DbPerson, context: &LemmyContext)
+    -> Result<(), LemmyError>;
+  async fn send_delete(&self, creator: &DbPerson, context: &LemmyContext)
+    -> Result<(), LemmyError>;
   async fn send_undo_delete(
     &self,
-    creator: &User_,
+    creator: &DbPerson,
     context: &LemmyContext,
   ) -> Result<(), LemmyError>;
-  async fn send_remove(&self, mod_: &User_, context: &LemmyContext) -> Result<(), LemmyError>;
-  async fn send_undo_remove(&self, mod_: &User_, context: &LemmyContext) -> Result<(), LemmyError>;
+  async fn send_remove(&self, mod_: &DbPerson, context: &LemmyContext) -> Result<(), LemmyError>;
+  async fn send_undo_remove(
+    &self,
+    mod_: &DbPerson,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
 }
 
 #[async_trait::async_trait(?Send)]
 pub trait ApubLikeableType {
-  async fn send_like(&self, creator: &User_, context: &LemmyContext) -> Result<(), LemmyError>;
-  async fn send_dislike(&self, creator: &User_, context: &LemmyContext) -> Result<(), LemmyError>;
-  async fn send_undo_like(&self, creator: &User_, context: &LemmyContext)
-    -> Result<(), LemmyError>;
+  async fn send_like(&self, creator: &DbPerson, context: &LemmyContext) -> Result<(), LemmyError>;
+  async fn send_dislike(
+    &self,
+    creator: &DbPerson,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
+  async fn send_undo_like(
+    &self,
+    creator: &DbPerson,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
 }
 
-/// Common methods provided by ActivityPub actors (community and user). Not all methods are
+/// Common methods provided by ActivityPub actors (community and person). Not all methods are
 /// implemented by all actors.
 #[async_trait::async_trait(?Send)]
 pub trait ActorType {
@@ -147,38 +165,6 @@ pub trait ActorType {
   // TODO: every actor should have a public key, so this shouldnt be an option (needs to be fixed in db)
   fn public_key(&self) -> Option<String>;
   fn private_key(&self) -> Option<String>;
-
-  async fn send_follow(
-    &self,
-    follow_actor_id: &Url,
-    context: &LemmyContext,
-  ) -> Result<(), LemmyError>;
-  async fn send_unfollow(
-    &self,
-    follow_actor_id: &Url,
-    context: &LemmyContext,
-  ) -> Result<(), LemmyError>;
-
-  async fn send_accept_follow(
-    &self,
-    follow: Follow,
-    context: &LemmyContext,
-  ) -> Result<(), LemmyError>;
-
-  async fn send_delete(&self, context: &LemmyContext) -> Result<(), LemmyError>;
-  async fn send_undo_delete(&self, context: &LemmyContext) -> Result<(), LemmyError>;
-
-  async fn send_remove(&self, context: &LemmyContext) -> Result<(), LemmyError>;
-  async fn send_undo_remove(&self, context: &LemmyContext) -> Result<(), LemmyError>;
-
-  async fn send_announce(
-    &self,
-    activity: AnyBase,
-    context: &LemmyContext,
-  ) -> Result<(), LemmyError>;
-
-  /// For a given community, returns the inboxes of all followers.
-  async fn get_follower_inboxes(&self, pool: &DbPool) -> Result<Vec<Url>, LemmyError>;
 
   fn get_shared_inbox_or_inbox_url(&self) -> Url;
 
@@ -203,9 +189,58 @@ pub trait ActorType {
   }
 }
 
+#[async_trait::async_trait(?Send)]
+pub trait CommunityType {
+  async fn get_follower_inboxes(&self, pool: &DbPool) -> Result<Vec<Url>, LemmyError>;
+  async fn send_accept_follow(
+    &self,
+    follow: Follow,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
+
+  async fn send_delete(&self, context: &LemmyContext) -> Result<(), LemmyError>;
+  async fn send_undo_delete(&self, context: &LemmyContext) -> Result<(), LemmyError>;
+
+  async fn send_remove(&self, context: &LemmyContext) -> Result<(), LemmyError>;
+  async fn send_undo_remove(&self, context: &LemmyContext) -> Result<(), LemmyError>;
+
+  async fn send_announce(
+    &self,
+    activity: AnyBase,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
+
+  async fn send_add_mod(
+    &self,
+    actor: &Person,
+    added_mod: Person,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
+  async fn send_remove_mod(
+    &self,
+    actor: &Person,
+    removed_mod: Person,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
+}
+
+#[async_trait::async_trait(?Send)]
+pub trait UserType {
+  async fn send_follow(
+    &self,
+    follow_actor_id: &Url,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
+  async fn send_unfollow(
+    &self,
+    follow_actor_id: &Url,
+    context: &LemmyContext,
+  ) -> Result<(), LemmyError>;
+}
+
 pub enum EndpointType {
   Community,
-  User,
+  Person,
   Post,
   Comment,
   PrivateMessage,
@@ -215,10 +250,10 @@ pub enum EndpointType {
 pub fn generate_apub_endpoint(
   endpoint_type: EndpointType,
   name: &str,
-) -> Result<lemmy_db_schema::Url, ParseError> {
+) -> Result<DbUrl, ParseError> {
   let point = match endpoint_type {
     EndpointType::Community => "c",
-    EndpointType::User => "u",
+    EndpointType::Person => "u",
     EndpointType::Post => "post",
     EndpointType::Comment => "comment",
     EndpointType::PrivateMessage => "private_message",
@@ -235,21 +270,15 @@ pub fn generate_apub_endpoint(
   )
 }
 
-pub fn generate_followers_url(
-  actor_id: &lemmy_db_schema::Url,
-) -> Result<lemmy_db_schema::Url, ParseError> {
+pub fn generate_followers_url(actor_id: &DbUrl) -> Result<DbUrl, ParseError> {
   Ok(Url::parse(&format!("{}/followers", actor_id))?.into())
 }
 
-pub fn generate_inbox_url(
-  actor_id: &lemmy_db_schema::Url,
-) -> Result<lemmy_db_schema::Url, ParseError> {
+pub fn generate_inbox_url(actor_id: &DbUrl) -> Result<DbUrl, ParseError> {
   Ok(Url::parse(&format!("{}/inbox", actor_id))?.into())
 }
 
-pub fn generate_shared_inbox_url(
-  actor_id: &lemmy_db_schema::Url,
-) -> Result<lemmy_db_schema::Url, LemmyError> {
+pub fn generate_shared_inbox_url(actor_id: &DbUrl) -> Result<DbUrl, LemmyError> {
   let actor_id = actor_id.clone().into_inner();
   let url = format!(
     "{}://{}{}/inbox",
@@ -264,9 +293,13 @@ pub fn generate_shared_inbox_url(
   Ok(Url::parse(&url)?.into())
 }
 
+pub fn generate_moderators_url(community_id: &DbUrl) -> Result<DbUrl, LemmyError> {
+  Ok(Url::parse(&format!("{}/moderators", community_id))?.into())
+}
+
 /// Store a sent or received activity in the database, for logging purposes. These records are not
 /// persistent.
-pub(crate) async fn insert_activity<T>(
+pub async fn insert_activity<T>(
   ap_id: &Url,
   activity: T,
   local: bool,
@@ -276,7 +309,7 @@ pub(crate) async fn insert_activity<T>(
 where
   T: Serialize + std::fmt::Debug + Send + 'static,
 {
-  let ap_id = ap_id.to_string();
+  let ap_id = ap_id.to_owned().into();
   blocking(pool, move |conn| {
     Activity::insert(conn, ap_id, &activity, local, sensitive)
   })
@@ -284,15 +317,15 @@ where
   Ok(())
 }
 
-pub(crate) enum PostOrComment {
-  Comment(Comment),
-  Post(Post),
+pub enum PostOrComment {
+  Comment(Box<Comment>),
+  Post(Box<Post>),
 }
 
 /// Tries to find a post or comment in the local database, without any network requests.
 /// This is used to handle deletions and removals, because in case we dont have the object, we can
 /// simply ignore the activity.
-pub(crate) async fn find_post_or_comment_by_id(
+pub async fn find_post_or_comment_by_id(
   context: &LemmyContext,
   apub_id: Url,
 ) -> Result<PostOrComment, LemmyError> {
@@ -302,7 +335,7 @@ pub(crate) async fn find_post_or_comment_by_id(
   })
   .await?;
   if let Ok(p) = post {
-    return Ok(PostOrComment::Post(p));
+    return Ok(PostOrComment::Post(Box::new(p)));
   }
 
   let ap_id = apub_id.clone();
@@ -311,18 +344,19 @@ pub(crate) async fn find_post_or_comment_by_id(
   })
   .await?;
   if let Ok(c) = comment {
-    return Ok(PostOrComment::Comment(c));
+    return Ok(PostOrComment::Comment(Box::new(c)));
   }
 
   Err(NotFound.into())
 }
 
+#[derive(Debug)]
 pub(crate) enum Object {
-  Comment(Comment),
-  Post(Post),
-  Community(Community),
-  User(User_),
-  PrivateMessage(PrivateMessage),
+  Comment(Box<Comment>),
+  Post(Box<Post>),
+  Community(Box<Community>),
+  Person(Box<DbPerson>),
+  PrivateMessage(Box<PrivateMessage>),
 }
 
 pub(crate) async fn find_object_by_id(
@@ -332,18 +366,18 @@ pub(crate) async fn find_object_by_id(
   let ap_id = apub_id.clone();
   if let Ok(pc) = find_post_or_comment_by_id(context, ap_id.to_owned()).await {
     return Ok(match pc {
-      PostOrComment::Post(p) => Object::Post(p),
-      PostOrComment::Comment(c) => Object::Comment(c),
+      PostOrComment::Post(p) => Object::Post(Box::new(*p)),
+      PostOrComment::Comment(c) => Object::Comment(Box::new(*c)),
     });
   }
 
   let ap_id = apub_id.clone();
-  let user = blocking(context.pool(), move |conn| {
-    User_::read_from_apub_id(conn, &ap_id.into())
+  let person = blocking(context.pool(), move |conn| {
+    DbPerson::read_from_apub_id(conn, &ap_id.into())
   })
   .await?;
-  if let Ok(u) = user {
-    return Ok(Object::User(u));
+  if let Ok(u) = person {
+    return Ok(Object::Person(Box::new(u)));
   }
 
   let ap_id = apub_id.clone();
@@ -352,7 +386,7 @@ pub(crate) async fn find_object_by_id(
   })
   .await?;
   if let Ok(c) = community {
-    return Ok(Object::Community(c));
+    return Ok(Object::Community(Box::new(c)));
   }
 
   let private_message = blocking(context.pool(), move |conn| {
@@ -360,8 +394,54 @@ pub(crate) async fn find_object_by_id(
   })
   .await?;
   if let Ok(pm) = private_message {
-    return Ok(Object::PrivateMessage(pm));
+    return Ok(Object::PrivateMessage(Box::new(pm)));
   }
 
   Err(NotFound.into())
+}
+
+pub async fn check_community_or_site_ban(
+  person: &Person,
+  community_id: CommunityId,
+  pool: &DbPool,
+) -> Result<(), LemmyError> {
+  if person.banned {
+    return Err(anyhow!("Person is banned from site").into());
+  }
+  let person_id = person.id;
+  let is_banned =
+    move |conn: &'_ _| CommunityPersonBanView::get(conn, person_id, community_id).is_ok();
+  if blocking(pool, is_banned).await? {
+    return Err(anyhow!("Person is banned from community").into());
+  }
+
+  Ok(())
+}
+
+pub fn get_activity_to_and_cc<T, Kind>(activity: &T) -> Vec<Url>
+where
+  T: AsObject<Kind>,
+{
+  let mut to_and_cc = vec![];
+  if let Some(to) = activity.to() {
+    let to = to.to_owned().unwrap_to_vec();
+    let mut to = to
+      .iter()
+      .map(|t| t.as_xsd_any_uri())
+      .flatten()
+      .map(|t| t.to_owned())
+      .collect();
+    to_and_cc.append(&mut to);
+  }
+  if let Some(cc) = activity.cc() {
+    let cc = cc.to_owned().unwrap_to_vec();
+    let mut cc = cc
+      .iter()
+      .map(|c| c.as_xsd_any_uri())
+      .flatten()
+      .map(|c| c.to_owned())
+      .collect();
+    to_and_cc.append(&mut cc);
+  }
+  to_and_cc
 }

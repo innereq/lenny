@@ -1,4 +1,4 @@
-use crate::settings::Settings;
+use crate::{settings::structs::Settings, ApiError, IpAddr};
 use actix_web::dev::ConnectionInfo;
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use itertools::Itertools;
@@ -6,14 +6,14 @@ use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use regex::Regex;
 
 lazy_static! {
-static ref EMAIL_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9.!#$%&’*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$").unwrap();
-static ref USERNAME_MATCHES_REGEX: Regex = Regex::new(r"/u/[a-zA-Z][0-9a-zA-Z_]*").unwrap();
-// TODO keep this old one, it didn't work with port well tho
-// static ref MENTIONS_REGEX: Regex = Regex::new(r"@(?P<name>[\w.]+)@(?P<domain>[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)").unwrap();
-static ref MENTIONS_REGEX: Regex = Regex::new(r"@(?P<name>[\w.]+)@(?P<domain>[a-zA-Z0-9._:-]+)").unwrap();
-static ref VALID_USERNAME_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9_]{3,20}$").unwrap();
-static ref VALID_COMMUNITY_NAME_REGEX: Regex = Regex::new(r"^[a-z0-9_]{3,20}$").unwrap();
-static ref VALID_POST_TITLE_REGEX: Regex = Regex::new(r".*\S.*").unwrap();
+  static ref EMAIL_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9.!#$%&’*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$").expect("compile regex");
+  static ref USERNAME_MATCHES_REGEX: Regex = Regex::new(r"/u/[a-zA-Z][0-9a-zA-Z_]*").expect("compile regex");
+  // TODO keep this old one, it didn't work with port well tho
+  // static ref MENTIONS_REGEX: Regex = Regex::new(r"@(?P<name>[\w.]+)@(?P<domain>[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)").expect("compile regex");
+  static ref MENTIONS_REGEX: Regex = Regex::new(r"@(?P<name>[\w.]+)@(?P<domain>[a-zA-Z0-9._:-]+)").expect("compile regex");
+  static ref VALID_USERNAME_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9_]{3,20}$").expect("compile regex");
+  static ref VALID_COMMUNITY_NAME_REGEX: Regex = Regex::new(r"^[a-z0-9_]{3,20}$").expect("compile regex");
+  static ref VALID_POST_TITLE_REGEX: Regex = Regex::new(r".*\S.*").expect("compile regex");
 }
 
 pub fn naive_from_unix(time: i64) -> NaiveDateTime {
@@ -50,7 +50,7 @@ pub struct MentionData {
 
 impl MentionData {
   pub fn is_local(&self) -> bool {
-    Settings::get().hostname.eq(&self.domain)
+    Settings::get().hostname().eq(&self.domain)
   }
   pub fn full_name(&self) -> String {
     format!("@{}@{}", &self.name, &self.domain)
@@ -87,12 +87,14 @@ pub fn is_valid_post_title(title: &str) -> bool {
   VALID_POST_TITLE_REGEX.is_match(title)
 }
 
-pub fn get_ip(conn_info: &ConnectionInfo) -> String {
-  conn_info
-    .realip_remote_addr()
-    .unwrap_or("127.0.0.1:12345")
-    .split(':')
-    .next()
-    .unwrap_or("127.0.0.1")
-    .to_string()
+pub fn get_ip(conn_info: &ConnectionInfo) -> IpAddr {
+  IpAddr(
+    conn_info
+      .realip_remote_addr()
+      .unwrap_or("127.0.0.1:12345")
+      .split(':')
+      .next()
+      .unwrap_or("127.0.0.1")
+      .to_string(),
+  )
 }

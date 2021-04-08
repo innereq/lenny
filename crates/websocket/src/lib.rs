@@ -66,12 +66,13 @@ struct WebsocketResponse<T> {
   data: T,
 }
 
-pub fn serialize_websocket_message<Response>(
-  op: &UserOperation,
+pub fn serialize_websocket_message<OP, Response>(
+  op: &OP,
   data: &Response,
 ) -> Result<String, LemmyError>
 where
   Response: Serialize,
+  OP: ToString,
 {
   let response = WebsocketResponse {
     op: op.to_string(),
@@ -83,29 +84,14 @@ where
 #[derive(EnumString, ToString, Debug, Clone)]
 pub enum UserOperation {
   Login,
-  Register,
   GetCaptcha,
-  CreateCommunity,
-  CreatePost,
-  ListCommunities,
-  ListCategories,
-  GetPost,
-  GetCommunity,
-  CreateComment,
-  EditComment,
-  DeleteComment,
-  RemoveComment,
   MarkCommentAsRead,
   SaveComment,
   CreateCommentLike,
   CreateCommentReport,
   ResolveCommentReport,
   ListCommentReports,
-  GetPosts,
   CreatePostLike,
-  EditPost,
-  DeletePost,
-  RemovePost,
   LockPost,
   StickyPost,
   SavePost,
@@ -113,41 +99,71 @@ pub enum UserOperation {
   ResolvePostReport,
   ListPostReports,
   GetReportCount,
-  EditCommunity,
-  DeleteCommunity,
-  RemoveCommunity,
   FollowCommunity,
   GetFollowedCommunities,
-  GetUserDetails,
   GetReplies,
-  GetUserMentions,
-  MarkUserMentionAsRead,
+  GetPersonMentions,
+  MarkPersonMentionAsRead,
   GetModlog,
   BanFromCommunity,
   AddModToCommunity,
-  CreateSite,
-  EditSite,
-  GetSite,
   AddAdmin,
-  BanUser,
+  BanPerson,
   Search,
   MarkAllAsRead,
   SaveUserSettings,
   TransferCommunity,
   TransferSite,
-  DeleteAccount,
   PasswordReset,
   PasswordChange,
-  CreatePrivateMessage,
-  EditPrivateMessage,
-  DeletePrivateMessage,
   MarkPrivateMessageAsRead,
-  GetPrivateMessages,
   UserJoin,
-  GetComments,
   GetSiteConfig,
   SaveSiteConfig,
   PostJoin,
   CommunityJoin,
   ModJoin,
 }
+
+#[derive(EnumString, ToString, Debug, Clone)]
+pub enum UserOperationCrud {
+  // Site
+  CreateSite,
+  GetSite,
+  EditSite,
+  // Community
+  CreateCommunity,
+  ListCommunities,
+  GetCommunity,
+  EditCommunity,
+  DeleteCommunity,
+  RemoveCommunity,
+  // Post
+  CreatePost,
+  GetPost,
+  GetPosts,
+  EditPost,
+  DeletePost,
+  RemovePost,
+  // Comment
+  CreateComment,
+  GetComments,
+  EditComment,
+  DeleteComment,
+  RemoveComment,
+  // User
+  Register,
+  GetPersonDetails,
+  DeleteAccount,
+  // Private Message
+  CreatePrivateMessage,
+  GetPrivateMessages,
+  EditPrivateMessage,
+  DeletePrivateMessage,
+}
+
+pub trait OperationType {}
+
+impl OperationType for UserOperationCrud {}
+
+impl OperationType for UserOperation {}

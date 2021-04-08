@@ -9,21 +9,28 @@ pub mod email;
 pub mod rate_limit;
 pub mod request;
 pub mod settings;
+
 #[cfg(test)]
 mod test;
 pub mod utils;
 pub mod version;
 
-use crate::settings::Settings;
+use crate::settings::structs::Settings;
 use http::StatusCode;
 use regex::Regex;
+use std::fmt;
 use thiserror::Error;
 
 pub type ConnectionId = usize;
-pub type PostId = i32;
-pub type CommunityId = i32;
-pub type UserId = i32;
-pub type IPAddr = String;
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct IpAddr(pub String);
+
+impl fmt::Display for IpAddr {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "{}", self.0)
+  }
+}
 
 #[macro_export]
 macro_rules! location_info {
@@ -39,13 +46,13 @@ macro_rules! location_info {
 
 #[derive(Debug, Error)]
 #[error("{{\"error\":\"{message}\"}}")]
-pub struct APIError {
+pub struct ApiError {
   pub message: String,
 }
 
-impl APIError {
+impl ApiError {
   pub fn err(msg: &str) -> Self {
-    APIError {
+    ApiError {
       message: msg.to_string(),
     }
   }
@@ -83,12 +90,12 @@ impl actix_web::error::ResponseError for LemmyError {
 lazy_static! {
   pub static ref WEBFINGER_COMMUNITY_REGEX: Regex = Regex::new(&format!(
     "^group:([a-z0-9_]{{3, 20}})@{}$",
-    Settings::get().hostname
+    Settings::get().hostname()
   ))
-  .unwrap();
-  pub static ref WEBFINGER_USER_REGEX: Regex = Regex::new(&format!(
+  .expect("compile webfinger regex");
+  pub static ref WEBFINGER_USERNAME_REGEX: Regex = Regex::new(&format!(
     "^acct:([a-z0-9_]{{3, 20}})@{}$",
-    Settings::get().hostname
+    Settings::get().hostname()
   ))
-  .unwrap();
+  .expect("compile webfinger regex");
 }

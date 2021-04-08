@@ -10,40 +10,54 @@ use lemmy_db_schema::{
     CommentSaved,
     CommentSavedForm,
   },
-  Url,
+  CommentId,
+  DbUrl,
+  PersonId,
 };
 
 pub trait Comment_ {
-  fn update_ap_id(conn: &PgConnection, comment_id: i32, apub_id: Url) -> Result<Comment, Error>;
+  fn update_ap_id(
+    conn: &PgConnection,
+    comment_id: CommentId,
+    apub_id: DbUrl,
+  ) -> Result<Comment, Error>;
   fn permadelete_for_creator(
     conn: &PgConnection,
-    for_creator_id: i32,
+    for_creator_id: PersonId,
   ) -> Result<Vec<Comment>, Error>;
   fn update_deleted(
     conn: &PgConnection,
-    comment_id: i32,
+    comment_id: CommentId,
     new_deleted: bool,
   ) -> Result<Comment, Error>;
   fn update_removed(
     conn: &PgConnection,
-    comment_id: i32,
+    comment_id: CommentId,
     new_removed: bool,
   ) -> Result<Comment, Error>;
   fn update_removed_for_creator(
     conn: &PgConnection,
-    for_creator_id: i32,
+    for_creator_id: PersonId,
     new_removed: bool,
   ) -> Result<Vec<Comment>, Error>;
-  fn update_read(conn: &PgConnection, comment_id: i32, new_read: bool) -> Result<Comment, Error>;
+  fn update_read(
+    conn: &PgConnection,
+    comment_id: CommentId,
+    new_read: bool,
+  ) -> Result<Comment, Error>;
   fn update_content(
     conn: &PgConnection,
-    comment_id: i32,
+    comment_id: CommentId,
     new_content: &str,
   ) -> Result<Comment, Error>;
 }
 
 impl Comment_ for Comment {
-  fn update_ap_id(conn: &PgConnection, comment_id: i32, apub_id: Url) -> Result<Self, Error> {
+  fn update_ap_id(
+    conn: &PgConnection,
+    comment_id: CommentId,
+    apub_id: DbUrl,
+  ) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
 
     diesel::update(comment.find(comment_id))
@@ -51,7 +65,10 @@ impl Comment_ for Comment {
       .get_result::<Self>(conn)
   }
 
-  fn permadelete_for_creator(conn: &PgConnection, for_creator_id: i32) -> Result<Vec<Self>, Error> {
+  fn permadelete_for_creator(
+    conn: &PgConnection,
+    for_creator_id: PersonId,
+  ) -> Result<Vec<Self>, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
     diesel::update(comment.filter(creator_id.eq(for_creator_id)))
       .set((
@@ -64,7 +81,7 @@ impl Comment_ for Comment {
 
   fn update_deleted(
     conn: &PgConnection,
-    comment_id: i32,
+    comment_id: CommentId,
     new_deleted: bool,
   ) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
@@ -75,7 +92,7 @@ impl Comment_ for Comment {
 
   fn update_removed(
     conn: &PgConnection,
-    comment_id: i32,
+    comment_id: CommentId,
     new_removed: bool,
   ) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
@@ -86,7 +103,7 @@ impl Comment_ for Comment {
 
   fn update_removed_for_creator(
     conn: &PgConnection,
-    for_creator_id: i32,
+    for_creator_id: PersonId,
     new_removed: bool,
   ) -> Result<Vec<Self>, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
@@ -95,7 +112,11 @@ impl Comment_ for Comment {
       .get_results::<Self>(conn)
   }
 
-  fn update_read(conn: &PgConnection, comment_id: i32, new_read: bool) -> Result<Self, Error> {
+  fn update_read(
+    conn: &PgConnection,
+    comment_id: CommentId,
+    new_read: bool,
+  ) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
     diesel::update(comment.find(comment_id))
       .set(read.eq(new_read))
@@ -104,7 +125,7 @@ impl Comment_ for Comment {
 
   fn update_content(
     conn: &PgConnection,
-    comment_id: i32,
+    comment_id: CommentId,
     new_content: &str,
   ) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
@@ -114,13 +135,13 @@ impl Comment_ for Comment {
   }
 }
 
-impl Crud<CommentForm> for Comment {
-  fn read(conn: &PgConnection, comment_id: i32) -> Result<Self, Error> {
+impl Crud<CommentForm, CommentId> for Comment {
+  fn read(conn: &PgConnection, comment_id: CommentId) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
     comment.find(comment_id).first::<Self>(conn)
   }
 
-  fn delete(conn: &PgConnection, comment_id: i32) -> Result<usize, Error> {
+  fn delete(conn: &PgConnection, comment_id: CommentId) -> Result<usize, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
     diesel::delete(comment.find(comment_id)).execute(conn)
   }
@@ -134,7 +155,7 @@ impl Crud<CommentForm> for Comment {
 
   fn update(
     conn: &PgConnection,
-    comment_id: i32,
+    comment_id: CommentId,
     comment_form: &CommentForm,
   ) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
@@ -145,7 +166,7 @@ impl Crud<CommentForm> for Comment {
 }
 
 impl ApubObject<CommentForm> for Comment {
-  fn read_from_apub_id(conn: &PgConnection, object_id: &Url) -> Result<Self, Error> {
+  fn read_from_apub_id(conn: &PgConnection, object_id: &DbUrl) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment::dsl::*;
     comment.filter(ap_id.eq(object_id)).first::<Self>(conn)
   }
@@ -161,22 +182,26 @@ impl ApubObject<CommentForm> for Comment {
   }
 }
 
-impl Likeable<CommentLikeForm> for CommentLike {
+impl Likeable<CommentLikeForm, CommentId> for CommentLike {
   fn like(conn: &PgConnection, comment_like_form: &CommentLikeForm) -> Result<Self, Error> {
     use lemmy_db_schema::schema::comment_like::dsl::*;
     insert_into(comment_like)
       .values(comment_like_form)
-      .on_conflict((comment_id, user_id))
+      .on_conflict((comment_id, person_id))
       .do_update()
       .set(comment_like_form)
       .get_result::<Self>(conn)
   }
-  fn remove(conn: &PgConnection, user_id: i32, comment_id: i32) -> Result<usize, Error> {
+  fn remove(
+    conn: &PgConnection,
+    person_id: PersonId,
+    comment_id: CommentId,
+  ) -> Result<usize, Error> {
     use lemmy_db_schema::schema::comment_like::dsl;
     diesel::delete(
       dsl::comment_like
         .filter(dsl::comment_id.eq(comment_id))
-        .filter(dsl::user_id.eq(user_id)),
+        .filter(dsl::person_id.eq(person_id)),
     )
     .execute(conn)
   }
@@ -187,7 +212,7 @@ impl Saveable<CommentSavedForm> for CommentSaved {
     use lemmy_db_schema::schema::comment_saved::dsl::*;
     insert_into(comment_saved)
       .values(comment_saved_form)
-      .on_conflict((comment_id, user_id))
+      .on_conflict((comment_id, person_id))
       .do_update()
       .set(comment_saved_form)
       .get_result::<Self>(conn)
@@ -197,7 +222,7 @@ impl Saveable<CommentSavedForm> for CommentSaved {
     diesel::delete(
       comment_saved
         .filter(comment_id.eq(comment_saved_form.comment_id))
-        .filter(user_id.eq(comment_saved_form.user_id)),
+        .filter(person_id.eq(comment_saved_form.person_id)),
     )
     .execute(conn)
   }
@@ -205,109 +230,50 @@ impl Saveable<CommentSavedForm> for CommentSaved {
 
 #[cfg(test)]
 mod tests {
-  use crate::{establish_unpooled_connection, Crud, Likeable, ListingType, Saveable, SortType};
+  use crate::{establish_unpooled_connection, Crud, Likeable, Saveable};
   use lemmy_db_schema::source::{
     comment::*,
     community::{Community, CommunityForm},
+    person::{Person, PersonForm},
     post::*,
-    user::{UserForm, User_},
   };
+  use serial_test::serial;
 
   #[test]
+  #[serial]
   fn test_crud() {
     let conn = establish_unpooled_connection();
 
-    let new_user = UserForm {
+    let new_person = PersonForm {
       name: "terry".into(),
-      preferred_username: None,
-      password_encrypted: "nope".into(),
-      email: None,
-      matrix_user_id: None,
-      avatar: None,
-      banner: None,
-      admin: false,
-      banned: Some(false),
-      published: None,
-      updated: None,
-      show_nsfw: false,
-      theme: "browser".into(),
-      default_sort_type: SortType::Hot as i16,
-      default_listing_type: ListingType::Subscribed as i16,
-      lang: "browser".into(),
-      show_avatars: true,
-      send_notifications_to_email: false,
-      actor_id: None,
-      bio: None,
-      local: true,
-      private_key: None,
-      public_key: None,
-      last_refreshed_at: None,
-      inbox_url: None,
-      shared_inbox_url: None,
+      ..PersonForm::default()
     };
 
-    let inserted_user = User_::create(&conn, &new_user).unwrap();
+    let inserted_person = Person::create(&conn, &new_person).unwrap();
 
     let new_community = CommunityForm {
       name: "test community".to_string(),
       title: "nada".to_owned(),
-      description: None,
-      category_id: 1,
-      creator_id: inserted_user.id,
-      removed: None,
-      deleted: None,
-      updated: None,
-      nsfw: false,
-      actor_id: None,
-      local: true,
-      private_key: None,
-      public_key: None,
-      last_refreshed_at: None,
-      published: None,
-      banner: None,
-      icon: None,
-      inbox_url: None,
-      shared_inbox_url: None,
-      followers_url: None,
+      creator_id: inserted_person.id,
+      ..CommunityForm::default()
     };
 
     let inserted_community = Community::create(&conn, &new_community).unwrap();
 
     let new_post = PostForm {
       name: "A test post".into(),
-      creator_id: inserted_user.id,
-      url: None,
-      body: None,
+      creator_id: inserted_person.id,
       community_id: inserted_community.id,
-      removed: None,
-      deleted: None,
-      locked: None,
-      stickied: None,
-      updated: None,
-      nsfw: false,
-      embed_title: None,
-      embed_description: None,
-      embed_html: None,
-      thumbnail_url: None,
-      ap_id: None,
-      local: true,
-      published: None,
+      ..PostForm::default()
     };
 
     let inserted_post = Post::create(&conn, &new_post).unwrap();
 
     let comment_form = CommentForm {
       content: "A test comment".into(),
-      creator_id: inserted_user.id,
+      creator_id: inserted_person.id,
       post_id: inserted_post.id,
-      removed: None,
-      deleted: None,
-      read: None,
-      parent_id: None,
-      published: None,
-      updated: None,
-      ap_id: None,
-      local: true,
+      ..CommentForm::default()
     };
 
     let inserted_comment = Comment::create(&conn, &comment_form).unwrap();
@@ -315,7 +281,7 @@ mod tests {
     let expected_comment = Comment {
       id: inserted_comment.id,
       content: "A test comment".into(),
-      creator_id: inserted_user.id,
+      creator_id: inserted_person.id,
       post_id: inserted_post.id,
       removed: false,
       deleted: false,
@@ -329,16 +295,10 @@ mod tests {
 
     let child_comment_form = CommentForm {
       content: "A child comment".into(),
-      creator_id: inserted_user.id,
+      creator_id: inserted_person.id,
       post_id: inserted_post.id,
       parent_id: Some(inserted_comment.id),
-      removed: None,
-      deleted: None,
-      read: None,
-      published: None,
-      updated: None,
-      ap_id: None,
-      local: true,
+      ..CommentForm::default()
     };
 
     let inserted_child_comment = Comment::create(&conn, &child_comment_form).unwrap();
@@ -347,7 +307,7 @@ mod tests {
     let comment_like_form = CommentLikeForm {
       comment_id: inserted_comment.id,
       post_id: inserted_post.id,
-      user_id: inserted_user.id,
+      person_id: inserted_person.id,
       score: 1,
     };
 
@@ -357,7 +317,7 @@ mod tests {
       id: inserted_comment_like.id,
       comment_id: inserted_comment.id,
       post_id: inserted_post.id,
-      user_id: inserted_user.id,
+      person_id: inserted_person.id,
       published: inserted_comment_like.published,
       score: 1,
     };
@@ -365,7 +325,7 @@ mod tests {
     // Comment Saved
     let comment_saved_form = CommentSavedForm {
       comment_id: inserted_comment.id,
-      user_id: inserted_user.id,
+      person_id: inserted_person.id,
     };
 
     let inserted_comment_saved = CommentSaved::save(&conn, &comment_saved_form).unwrap();
@@ -373,19 +333,19 @@ mod tests {
     let expected_comment_saved = CommentSaved {
       id: inserted_comment_saved.id,
       comment_id: inserted_comment.id,
-      user_id: inserted_user.id,
+      person_id: inserted_person.id,
       published: inserted_comment_saved.published,
     };
 
     let read_comment = Comment::read(&conn, inserted_comment.id).unwrap();
     let updated_comment = Comment::update(&conn, inserted_comment.id, &comment_form).unwrap();
-    let like_removed = CommentLike::remove(&conn, inserted_user.id, inserted_comment.id).unwrap();
+    let like_removed = CommentLike::remove(&conn, inserted_person.id, inserted_comment.id).unwrap();
     let saved_removed = CommentSaved::unsave(&conn, &comment_saved_form).unwrap();
     let num_deleted = Comment::delete(&conn, inserted_comment.id).unwrap();
     Comment::delete(&conn, inserted_child_comment.id).unwrap();
     Post::delete(&conn, inserted_post.id).unwrap();
     Community::delete(&conn, inserted_community.id).unwrap();
-    User_::delete(&conn, inserted_user.id).unwrap();
+    Person::delete(&conn, inserted_person.id).unwrap();
 
     assert_eq!(expected_comment, read_comment);
     assert_eq!(expected_comment, inserted_comment);

@@ -1,4 +1,11 @@
-use crate::{messages::*, serialize_websocket_message, LemmyContext, UserOperation};
+use crate::{
+  messages::*,
+  serialize_websocket_message,
+  LemmyContext,
+  OperationType,
+  UserOperation,
+  UserOperationCrud,
+};
 use actix::prelude::*;
 use anyhow::Context as acontext;
 use background_jobs::QueueHandle;
@@ -6,17 +13,15 @@ use diesel::{
   r2d2::{ConnectionManager, Pool},
   PgConnection,
 };
-use lemmy_structs::{comment::*, post::*};
+use lemmy_api_common::{comment::*, post::*};
+use lemmy_db_schema::{CommunityId, LocalUserId, PostId};
 use lemmy_utils::{
   location_info,
   rate_limit::RateLimit,
-  APIError,
-  CommunityId,
+  ApiError,
   ConnectionId,
-  IPAddr,
+  IpAddr,
   LemmyError,
-  PostId,
-  UserId,
 };
 use rand::rngs::ThreadRng;
 use reqwest::Client;
@@ -32,6 +37,13 @@ type MessageHandlerType = fn(
   context: LemmyContext,
   id: ConnectionId,
   op: UserOperation,
+  data: &str,
+) -> Pin<Box<dyn Future<Output = Result<String, LemmyError>> + '_>>;
+
+type MessageHandlerCrudType = fn(
+  context: LemmyContext,
+  id: ConnectionId,
+  op: UserOperationCrud,
   data: &str,
 ) -> Pin<Box<dyn Future<Output = Result<String, LemmyError>> + '_>>;
 
@@ -51,7 +63,7 @@ pub struct ChatServer {
 
   /// A map from user id to its connection ID for joined users. Remember a user can have multiple
   /// sessions (IE clients)
-  pub(super) user_rooms: HashMap<UserId, HashSet<ConnectionId>>,
+  pub(super) user_rooms: HashMap<LocalUserId, HashSet<ConnectionId>>,
 
   pub(super) rng: ThreadRng,
 
@@ -65,6 +77,7 @@ pub struct ChatServer {
   pub(super) captchas: Vec<CaptchaItem>,
 
   message_handler: MessageHandlerType,
+  message_handler_crud: MessageHandlerCrudType,
 
   /// An HTTP Client
   client: Client,
@@ -73,8 +86,8 @@ pub struct ChatServer {
 }
 
 pub struct SessionInfo {
-  pub addr: Recipient<WSMessage>,
-  pub ip: IPAddr,
+  pub addr: Recipient<WsMessage>,
+  pub ip: IpAddr,
 }
 
 /// `ChatServer` is an actor. It maintains list of connection client session.
@@ -85,6 +98,7 @@ impl ChatServer {
     pool: Pool<ConnectionManager<PgConnection>>,
     rate_limiter: RateLimit,
     message_handler: MessageHandlerType,
+    message_handler_crud: MessageHandlerCrudType,
     client: Client,
     activity_queue: QueueHandle,
   ) -> ChatServer {
@@ -99,6 +113,7 @@ impl ChatServer {
       rate_limiter,
       captchas: Vec::new(),
       message_handler,
+      message_handler_crud,
       client,
       activity_queue,
     }
@@ -185,7 +200,11 @@ impl ChatServer {
     Ok(())
   }
 
-  pub fn join_user_room(&mut self, user_id: UserId, id: ConnectionId) -> Result<(), LemmyError> {
+  pub fn join_user_room(
+    &mut self,
+    user_id: LocalUserId,
+    id: ConnectionId,
+  ) -> Result<(), LemmyError> {
     // remove session from all rooms
     for sessions in self.user_rooms.values_mut() {
       sessions.remove(&id);
@@ -205,14 +224,15 @@ impl ChatServer {
     Ok(())
   }
 
-  fn send_post_room_message<Response>(
+  fn send_post_room_message<OP, Response>(
     &self,
-    op: &UserOperation,
+    op: &OP,
     response: &Response,
     post_id: PostId,
     websocket_id: Option<ConnectionId>,
   ) -> Result<(), LemmyError>
   where
+    OP: OperationType + ToString,
     Response: Serialize,
   {
     let res_str = &serialize_websocket_message(op, response)?;
@@ -229,14 +249,15 @@ impl ChatServer {
     Ok(())
   }
 
-  pub fn send_community_room_message<Response>(
+  pub fn send_community_room_message<OP, Response>(
     &self,
-    op: &UserOperation,
+    op: &OP,
     response: &Response,
     community_id: CommunityId,
     websocket_id: Option<ConnectionId>,
   ) -> Result<(), LemmyError>
   where
+    OP: OperationType + ToString,
     Response: Serialize,
   {
     let res_str = &serialize_websocket_message(op, response)?;
@@ -253,14 +274,15 @@ impl ChatServer {
     Ok(())
   }
 
-  pub fn send_mod_room_message<Response>(
+  pub fn send_mod_room_message<OP, Response>(
     &self,
-    op: &UserOperation,
+    op: &OP,
     response: &Response,
     community_id: CommunityId,
     websocket_id: Option<ConnectionId>,
   ) -> Result<(), LemmyError>
   where
+    OP: OperationType + ToString,
     Response: Serialize,
   {
     let res_str = &serialize_websocket_message(op, response)?;
@@ -277,13 +299,14 @@ impl ChatServer {
     Ok(())
   }
 
-  pub fn send_all_message<Response>(
+  pub fn send_all_message<OP, Response>(
     &self,
-    op: &UserOperation,
+    op: &OP,
     response: &Response,
     websocket_id: Option<ConnectionId>,
   ) -> Result<(), LemmyError>
   where
+    OP: OperationType + ToString,
     Response: Serialize,
   {
     let res_str = &serialize_websocket_message(op, response)?;
@@ -298,14 +321,15 @@ impl ChatServer {
     Ok(())
   }
 
-  pub fn send_user_room_message<Response>(
+  pub fn send_user_room_message<OP, Response>(
     &self,
-    op: &UserOperation,
+    op: &OP,
     response: &Response,
-    recipient_id: UserId,
+    recipient_id: LocalUserId,
     websocket_id: Option<ConnectionId>,
   ) -> Result<(), LemmyError>
   where
+    OP: OperationType + ToString,
     Response: Serialize,
   {
     let res_str = &serialize_websocket_message(op, response)?;
@@ -322,12 +346,15 @@ impl ChatServer {
     Ok(())
   }
 
-  pub fn send_comment(
+  pub fn send_comment<OP>(
     &self,
-    user_operation: &UserOperation,
+    user_operation: &OP,
     comment: &CommentResponse,
     websocket_id: Option<ConnectionId>,
-  ) -> Result<(), LemmyError> {
+  ) -> Result<(), LemmyError>
+  where
+    OP: OperationType + ToString,
+  {
     let mut comment_reply_sent = comment.clone();
 
     // Strip out my specific user info
@@ -345,7 +372,12 @@ impl ChatServer {
     )?;
 
     // Send it to the community too
-    self.send_community_room_message(user_operation, &comment_post_sent, 0, websocket_id)?;
+    self.send_community_room_message(
+      user_operation,
+      &comment_post_sent,
+      CommunityId(0),
+      websocket_id,
+    )?;
     self.send_community_room_message(
       user_operation,
       &comment_post_sent,
@@ -366,12 +398,15 @@ impl ChatServer {
     Ok(())
   }
 
-  pub fn send_post(
+  pub fn send_post<OP>(
     &self,
-    user_operation: &UserOperation,
+    user_operation: &OP,
     post_res: &PostResponse,
     websocket_id: Option<ConnectionId>,
-  ) -> Result<(), LemmyError> {
+  ) -> Result<(), LemmyError>
+  where
+    OP: OperationType + ToString,
+  {
     let community_id = post_res.post_view.community.id;
 
     // Don't send my data with it
@@ -379,7 +414,7 @@ impl ChatServer {
     post_sent.post_view.my_vote = None;
 
     // Send it to /c/all and that community
-    self.send_community_room_message(user_operation, &post_sent, 0, websocket_id)?;
+    self.send_community_room_message(user_operation, &post_sent, CommunityId(0), websocket_id)?;
     self.send_community_room_message(user_operation, &post_sent, community_id, websocket_id)?;
 
     // Send it to the post room
@@ -395,7 +430,7 @@ impl ChatServer {
 
   fn sendit(&self, message: &str, id: ConnectionId) {
     if let Some(info) = self.sessions.get(&id) {
-      let _ = info.addr.do_send(WSMessage(message.to_owned()));
+      let _ = info.addr.do_send(WsMessage(message.to_owned()));
     }
   }
 
@@ -406,9 +441,9 @@ impl ChatServer {
   ) -> impl Future<Output = Result<String, LemmyError>> {
     let rate_limiter = self.rate_limiter.clone();
 
-    let ip: IPAddr = match self.sessions.get(&msg.id) {
+    let ip: IpAddr = match self.sessions.get(&msg.id) {
       Some(info) => info.ip.to_owned(),
-      None => "blank_ip".to_string(),
+      None => IpAddr("blank_ip".to_string()),
     };
 
     let context = LemmyContext {
@@ -417,21 +452,27 @@ impl ChatServer {
       client: self.client.to_owned(),
       activity_queue: self.activity_queue.to_owned(),
     };
+    let message_handler_crud = self.message_handler_crud;
     let message_handler = self.message_handler;
     async move {
       let json: Value = serde_json::from_str(&msg.msg)?;
       let data = &json["data"].to_string();
-      let op = &json["op"].as_str().ok_or(APIError {
+      let op = &json["op"].as_str().ok_or(ApiError {
         message: "Unknown op type".to_string(),
       })?;
 
-      let user_operation = UserOperation::from_str(&op)?;
-      let fut = (message_handler)(context, msg.id, user_operation.clone(), data);
-      match user_operation {
-        UserOperation::Register => rate_limiter.register().wrap(ip, fut).await,
-        UserOperation::CreatePost => rate_limiter.post().wrap(ip, fut).await,
-        UserOperation::CreateCommunity => rate_limiter.register().wrap(ip, fut).await,
-        _ => rate_limiter.message().wrap(ip, fut).await,
+      if let Ok(user_operation_crud) = UserOperationCrud::from_str(&op) {
+        let fut = (message_handler_crud)(context, msg.id, user_operation_crud.clone(), data);
+        match user_operation_crud {
+          UserOperationCrud::Register => rate_limiter.register().wrap(ip, fut).await,
+          UserOperationCrud::CreatePost => rate_limiter.post().wrap(ip, fut).await,
+          UserOperationCrud::CreateCommunity => rate_limiter.register().wrap(ip, fut).await,
+          _ => rate_limiter.message().wrap(ip, fut).await,
+        }
+      } else {
+        let user_operation = UserOperation::from_str(&op)?;
+        let fut = (message_handler)(context, msg.id, user_operation.clone(), data);
+        rate_limiter.message().wrap(ip, fut).await
       }
     }
   }

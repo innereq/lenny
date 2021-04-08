@@ -1,9 +1,9 @@
 use crate::{fetcher::fetch::fetch_remote_object, objects::FromApub, NoteExt, PageExt};
 use anyhow::anyhow;
 use diesel::result::Error::NotFound;
+use lemmy_api_common::blocking;
 use lemmy_db_queries::{ApubObject, Crud};
 use lemmy_db_schema::source::{comment::Comment, post::Post};
-use lemmy_structs::blocking;
 use lemmy_utils::LemmyError;
 use lemmy_websocket::LemmyContext;
 use log::debug;
@@ -13,7 +13,7 @@ use url::Url;
 /// pulled from its apub ID, inserted and returned.
 ///
 /// The parent community is also pulled if necessary. Comments are not pulled.
-pub(crate) async fn get_or_fetch_and_insert_post(
+pub async fn get_or_fetch_and_insert_post(
   post_ap_id: &Url,
   context: &LemmyContext,
   recursion_counter: &mut i32,
@@ -30,7 +30,14 @@ pub(crate) async fn get_or_fetch_and_insert_post(
       debug!("Fetching and creating remote post: {}", post_ap_id);
       let page =
         fetch_remote_object::<PageExt>(context.client(), post_ap_id, recursion_counter).await?;
-      let post = Post::from_apub(&page, context, post_ap_id.to_owned(), recursion_counter).await?;
+      let post = Post::from_apub(
+        &page,
+        context,
+        post_ap_id.to_owned(),
+        recursion_counter,
+        false,
+      )
+      .await?;
 
       Ok(post)
     }
@@ -42,7 +49,7 @@ pub(crate) async fn get_or_fetch_and_insert_post(
 /// pulled from its apub ID, inserted and returned.
 ///
 /// The parent community, post and comment are also pulled if necessary.
-pub(crate) async fn get_or_fetch_and_insert_comment(
+pub async fn get_or_fetch_and_insert_comment(
   comment_ap_id: &Url,
   context: &LemmyContext,
   recursion_counter: &mut i32,
@@ -67,6 +74,7 @@ pub(crate) async fn get_or_fetch_and_insert_comment(
         context,
         comment_ap_id.to_owned(),
         recursion_counter,
+        false,
       )
       .await?;
 

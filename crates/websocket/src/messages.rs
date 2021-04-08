@@ -1,13 +1,14 @@
 use crate::UserOperation;
 use actix::{prelude::*, Recipient};
-use lemmy_structs::{comment::CommentResponse, post::PostResponse};
-use lemmy_utils::{CommunityId, ConnectionId, IPAddr, PostId, UserId};
+use lemmy_api_common::{comment::CommentResponse, post::PostResponse};
+use lemmy_db_schema::{CommunityId, LocalUserId, PostId};
+use lemmy_utils::{ConnectionId, IpAddr};
 use serde::{Deserialize, Serialize};
 
 /// Chat server sends this messages to session
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct WSMessage(pub String);
+pub struct WsMessage(pub String);
 
 /// Message for chat server communications
 
@@ -15,8 +16,8 @@ pub struct WSMessage(pub String);
 #[derive(Message)]
 #[rtype(usize)]
 pub struct Connect {
-  pub addr: Recipient<WSMessage>,
-  pub ip: IPAddr,
+  pub addr: Recipient<WsMessage>,
+  pub ip: IpAddr,
 }
 
 /// Session is disconnected
@@ -24,7 +25,7 @@ pub struct Connect {
 #[rtype(result = "()")]
 pub struct Disconnect {
   pub id: ConnectionId,
-  pub ip: IPAddr,
+  pub ip: IpAddr,
 }
 
 /// The messages sent to websocket clients
@@ -39,25 +40,25 @@ pub struct StandardMessage {
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SendAllMessage<Response> {
-  pub op: UserOperation,
+pub struct SendAllMessage<OP: ToString, Response> {
+  pub op: OP,
   pub response: Response,
   pub websocket_id: Option<ConnectionId>,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SendUserRoomMessage<Response> {
-  pub op: UserOperation,
+pub struct SendUserRoomMessage<OP: ToString, Response> {
+  pub op: OP,
   pub response: Response,
-  pub recipient_id: UserId,
+  pub local_recipient_id: LocalUserId,
   pub websocket_id: Option<ConnectionId>,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SendCommunityRoomMessage<Response> {
-  pub op: UserOperation,
+pub struct SendCommunityRoomMessage<OP: ToString, Response> {
+  pub op: OP,
   pub response: Response,
   pub community_id: CommunityId,
   pub websocket_id: Option<ConnectionId>,
@@ -74,16 +75,16 @@ pub struct SendModRoomMessage<Response> {
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SendPost {
-  pub op: UserOperation,
+pub struct SendPost<OP: ToString> {
+  pub op: OP,
   pub post: PostResponse,
   pub websocket_id: Option<ConnectionId>,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SendComment {
-  pub op: UserOperation,
+pub struct SendComment<OP: ToString> {
+  pub op: OP,
   pub comment: CommentResponse,
   pub websocket_id: Option<ConnectionId>,
 }
@@ -91,7 +92,7 @@ pub struct SendComment {
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct JoinUserRoom {
-  pub user_id: UserId,
+  pub local_user_id: LocalUserId,
   pub id: ConnectionId,
 }
 

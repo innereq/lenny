@@ -1,18 +1,28 @@
 use activitystreams::{base::AnyBase, context};
 use lemmy_utils::LemmyError;
 use serde_json::json;
+use url::Url;
 
-pub(crate) fn lemmy_context() -> Result<Vec<AnyBase>, LemmyError> {
+pub fn lemmy_context() -> Result<Vec<AnyBase>, LemmyError> {
   let context_ext = AnyBase::from_arbitrary_json(json!(
   {
     "sc": "http://schema.org#",
-    "category": "sc:category",
     "sensitive": "as:sensitive",
     "stickied": "as:stickied",
+    "pt": "https://join.lemmy.ml#",
     "comments_enabled": {
-    "kind": "sc:Boolean",
-    "id": "pt:commentsEnabled"
-    }
+      "type": "sc:Boolean",
+      "id": "pt:commentsEnabled"
+    },
+    "moderators": "as:moderators",
+    "matrixUserId": {
+      "type": "sc:Text",
+      "id": "as:alsoKnownAs"
+    },
   }))?;
-  Ok(vec![AnyBase::from(context()), context_ext])
+  Ok(vec![
+    AnyBase::from(context()),
+    context_ext,
+    AnyBase::from(Url::parse("https://w3id.org/security/v1")?),
+  ])
 }

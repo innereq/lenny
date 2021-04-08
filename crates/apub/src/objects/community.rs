@@ -1,6 +1,7 @@
 use crate::{
-  extensions::{context::lemmy_context, group_extensions::GroupExtension},
-  fetcher::user::get_or_fetch_and_upsert_user,
+  extensions::{context::lemmy_context, group_extension::GroupExtension},
+  fetcher::{community::fetch_community_mods, person::get_or_fetch_and_upsert_person},
+  generate_moderators_url,
   objects::{
     check_object_domain,
     create_tombstone,
@@ -22,13 +23,13 @@ use activitystreams::{
 };
 use activitystreams_ext::Ext2;
 use anyhow::Context;
+use lemmy_api_common::blocking;
 use lemmy_db_queries::DbPool;
 use lemmy_db_schema::{
   naive_now,
   source::community::{Community, CommunityForm},
 };
 use lemmy_db_views_actor::community_moderator_view::CommunityModeratorView;
-use lemmy_structs::blocking;
 use lemmy_utils::{
   location_info,
   utils::convert_datetime,
@@ -42,10 +43,6 @@ impl ToApub for Community {
   type ApubType = GroupExt;
 
   async fn to_apub(&self, pool: &DbPool) -> Result<GroupExt, LemmyError> {
-    // The attributed to, is an ordered vector with the creator actor_ids first,
-    // then the rest of the moderators
-    // TODO Technically the instance admins can mod the community, but lets
-    // ignore that for now
     let id = self.id;
     let moderators = blocking(pool, move |conn| {
       CommunityModeratorView::for_community(&conn, id)
@@ -62,6 +59,7 @@ impl ToApub for Community {
       .set_id(self.actor_id.to_owned().into())
       .set_name(self.title.to_owned())
       .set_published(convert_datetime(self.published))
+      // NOTE: included attritubed_to field for compatibility with lemmy v0.9.9
       .set_many_attributed_tos(moderators);
 
     if let Some(u) = self.updated.to_owned() {
@@ -73,13 +71,13 @@ impl ToApub for Community {
 
     if let Some(icon_url) = &self.icon {
       let mut image = Image::new();
-      image.set_url(Url::parse(icon_url)?);
+      image.set_url::<Url>(icon_url.to_owned().into());
       group.set_icon(image.into_any_base()?);
     }
 
     if let Some(banner_url) = &self.banner {
       let mut image = Image::new();
-      image.set_url(Url::parse(banner_url)?);
+      image.set_url::<Url>(banner_url.to_owned().into());
       group.set_image(image.into_any_base()?);
     }
 
@@ -93,16 +91,9 @@ impl ToApub for Community {
         ..Default::default()
       });
 
-    let nsfw = self.nsfw;
-    let category_id = self.category_id;
-    let group_extension = blocking(pool, move |conn| {
-      GroupExtension::new(conn, category_id, nsfw)
-    })
-    .await??;
-
     Ok(Ext2::new(
       ap_actor,
-      group_extension,
+      GroupExtension::new(self.nsfw, generate_moderators_url(&self.actor_id)?.into())?,
       self.get_public_key_ext()?,
     ))
   }
@@ -121,14 +112,22 @@ impl ToApub for Community {
 impl FromApub for Community {
   type ApubType = GroupExt;
 
-  /// Converts a `Group` to `Community`.
+  /// Converts a `Group` to `Community`, inserts it into the database and updates moderators.
   async fn from_apub(
     group: &GroupExt,
     context: &LemmyContext,
     expected_domain: Url,
     request_counter: &mut i32,
+    mod_action_allowed: bool,
   ) -> Result<Community, LemmyError> {
-    get_object_from_apub(group, context, expected_domain, request_counter).await
+    get_object_from_apub(
+      group,
+      context,
+      expected_domain,
+      request_counter,
+      mod_action_allowed,
+    )
+    .await
   }
 }
 
@@ -139,18 +138,27 @@ impl FromApubToForm<GroupExt> for CommunityForm {
     context: &LemmyContext,
     expected_domain: Url,
     request_counter: &mut i32,
+    _mod_action_allowed: bool,
   ) -> Result<Self, LemmyError> {
-    let creator_and_moderator_uris = group.inner.attributed_to().context(location_info!())?;
-    let creator_uri = creator_and_moderator_uris
-      .as_many()
-      .context(location_info!())?
-      .iter()
-      .next()
-      .context(location_info!())?
-      .as_xsd_any_uri()
-      .context(location_info!())?;
+    let moderator_uris = fetch_community_mods(context, group, request_counter).await?;
+    let creator = if let Some(creator_uri) = moderator_uris.first() {
+      get_or_fetch_and_upsert_person(creator_uri, context, request_counter)
+    } else {
+      // NOTE: code for compatibility with lemmy v0.9.9
+      let creator_uri = group
+        .inner
+        .attributed_to()
+        .map(|a| a.as_many())
+        .flatten()
+        .map(|a| a.first())
+        .flatten()
+        .map(|a| a.as_xsd_any_uri())
+        .flatten()
+        .context(location_info!())?;
+      get_or_fetch_and_upsert_person(creator_uri, context, request_counter)
+    }
+    .await?;
 
-    let creator = get_or_fetch_and_upsert_user(creator_uri, context, request_counter).await?;
     let name = group
       .inner
       .preferred_username()
@@ -176,7 +184,7 @@ impl FromApubToForm<GroupExt> for CommunityForm {
           .url()
           .context(location_info!())?
           .as_single_xsd_any_uri()
-          .map(|u| u.to_string()),
+          .map(|u| u.to_owned().into()),
       ),
       None => None,
     };
@@ -188,7 +196,7 @@ impl FromApubToForm<GroupExt> for CommunityForm {
           .url()
           .context(location_info!())?
           .as_single_xsd_any_uri()
-          .map(|u| u.to_string()),
+          .map(|u| u.to_owned().into()),
       ),
       None => None,
     };
@@ -203,21 +211,14 @@ impl FromApubToForm<GroupExt> for CommunityForm {
       name,
       title,
       description,
-      category_id: group
-        .ext_one
-        .category
-        .clone()
-        .map(|c| c.identifier.parse::<i32>().ok())
-        .flatten()
-        .unwrap_or(1),
       creator_id: creator.id,
       removed: None,
       published: group.inner.published().map(|u| u.to_owned().naive_local()),
       updated: group.inner.updated().map(|u| u.to_owned().naive_local()),
       deleted: None,
-      nsfw: group.ext_one.sensitive.unwrap_or(false),
+      nsfw: Some(group.ext_one.sensitive.unwrap_or(false)),
       actor_id: Some(check_object_domain(group, expected_domain)?),
-      local: false,
+      local: Some(false),
       private_key: None,
       public_key: Some(group.ext_two.to_owned().public_key.public_key_pem),
       last_refreshed_at: Some(naive_now()),

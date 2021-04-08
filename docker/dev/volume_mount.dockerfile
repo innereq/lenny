@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:experimental
-FROM rust:1.47-buster as rust
+
+# Warning: this will not pick up migrations unless there are code changes
+FROM rust:1.50-buster as rust
 
 ENV HOME=/home/root
 
@@ -22,7 +24,6 @@ RUN apt-get update -y
 RUN apt-get install -y libpq-dev espeak 
 
 # Copy resources
-COPY config/defaults.hjson /config/defaults.hjson
 COPY --from=rust /app/lemmy_server /app/lemmy
 
 EXPOSE 8536

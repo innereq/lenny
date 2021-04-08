@@ -9,28 +9,33 @@ extern crate lazy_static;
 #[macro_use]
 extern crate diesel_migrations;
 
+#[cfg(test)]
+extern crate serial_test;
+
 use diesel::{result::Error, *};
-use lemmy_db_schema::Url;
+use lemmy_db_schema::{CommunityId, DbUrl, PersonId};
+use lemmy_utils::ApiError;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{env, env::VarError};
+use url::Url;
 
 pub mod aggregates;
 pub mod source;
 
 pub type DbPool = diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>;
 
-pub trait Crud<T> {
-  fn create(conn: &PgConnection, form: &T) -> Result<Self, Error>
+pub trait Crud<Form, IdType> {
+  fn create(conn: &PgConnection, form: &Form) -> Result<Self, Error>
   where
     Self: Sized;
-  fn read(conn: &PgConnection, id: i32) -> Result<Self, Error>
+  fn read(conn: &PgConnection, id: IdType) -> Result<Self, Error>
   where
     Self: Sized;
-  fn update(conn: &PgConnection, id: i32, form: &T) -> Result<Self, Error>
+  fn update(conn: &PgConnection, id: IdType, form: &Form) -> Result<Self, Error>
   where
     Self: Sized;
-  fn delete(_conn: &PgConnection, _id: i32) -> Result<usize, Error>
+  fn delete(_conn: &PgConnection, _id: IdType) -> Result<usize, Error>
   where
     Self: Sized,
   {
@@ -38,81 +43,85 @@ pub trait Crud<T> {
   }
 }
 
-pub trait Followable<T> {
-  fn follow(conn: &PgConnection, form: &T) -> Result<Self, Error>
+pub trait Followable<Form> {
+  fn follow(conn: &PgConnection, form: &Form) -> Result<Self, Error>
   where
     Self: Sized;
-  fn follow_accepted(conn: &PgConnection, community_id: i32, user_id: i32) -> Result<Self, Error>
+  fn follow_accepted(
+    conn: &PgConnection,
+    community_id: CommunityId,
+    person_id: PersonId,
+  ) -> Result<Self, Error>
   where
     Self: Sized;
-  fn unfollow(conn: &PgConnection, form: &T) -> Result<usize, Error>
+  fn unfollow(conn: &PgConnection, form: &Form) -> Result<usize, Error>
   where
     Self: Sized;
-  fn has_local_followers(conn: &PgConnection, community_id: i32) -> Result<bool, Error>;
+  fn has_local_followers(conn: &PgConnection, community_id: CommunityId) -> Result<bool, Error>;
 }
 
-pub trait Joinable<T> {
-  fn join(conn: &PgConnection, form: &T) -> Result<Self, Error>
+pub trait Joinable<Form> {
+  fn join(conn: &PgConnection, form: &Form) -> Result<Self, Error>
   where
     Self: Sized;
-  fn leave(conn: &PgConnection, form: &T) -> Result<usize, Error>
-  where
-    Self: Sized;
-}
-
-pub trait Likeable<T> {
-  fn like(conn: &PgConnection, form: &T) -> Result<Self, Error>
-  where
-    Self: Sized;
-  fn remove(conn: &PgConnection, user_id: i32, item_id: i32) -> Result<usize, Error>
+  fn leave(conn: &PgConnection, form: &Form) -> Result<usize, Error>
   where
     Self: Sized;
 }
 
-pub trait Bannable<T> {
-  fn ban(conn: &PgConnection, form: &T) -> Result<Self, Error>
+pub trait Likeable<Form, IdType> {
+  fn like(conn: &PgConnection, form: &Form) -> Result<Self, Error>
   where
     Self: Sized;
-  fn unban(conn: &PgConnection, form: &T) -> Result<usize, Error>
-  where
-    Self: Sized;
-}
-
-pub trait Saveable<T> {
-  fn save(conn: &PgConnection, form: &T) -> Result<Self, Error>
-  where
-    Self: Sized;
-  fn unsave(conn: &PgConnection, form: &T) -> Result<usize, Error>
+  fn remove(conn: &PgConnection, person_id: PersonId, item_id: IdType) -> Result<usize, Error>
   where
     Self: Sized;
 }
 
-pub trait Readable<T> {
-  fn mark_as_read(conn: &PgConnection, form: &T) -> Result<Self, Error>
+pub trait Bannable<Form> {
+  fn ban(conn: &PgConnection, form: &Form) -> Result<Self, Error>
   where
     Self: Sized;
-  fn mark_as_unread(conn: &PgConnection, form: &T) -> Result<usize, Error>
-  where
-    Self: Sized;
-}
-
-pub trait Reportable<T> {
-  fn report(conn: &PgConnection, form: &T) -> Result<Self, Error>
-  where
-    Self: Sized;
-  fn resolve(conn: &PgConnection, report_id: i32, resolver_id: i32) -> Result<usize, Error>
-  where
-    Self: Sized;
-  fn unresolve(conn: &PgConnection, report_id: i32, resolver_id: i32) -> Result<usize, Error>
+  fn unban(conn: &PgConnection, form: &Form) -> Result<usize, Error>
   where
     Self: Sized;
 }
 
-pub trait ApubObject<T> {
-  fn read_from_apub_id(conn: &PgConnection, object_id: &Url) -> Result<Self, Error>
+pub trait Saveable<Form> {
+  fn save(conn: &PgConnection, form: &Form) -> Result<Self, Error>
   where
     Self: Sized;
-  fn upsert(conn: &PgConnection, user_form: &T) -> Result<Self, Error>
+  fn unsave(conn: &PgConnection, form: &Form) -> Result<usize, Error>
+  where
+    Self: Sized;
+}
+
+pub trait Readable<Form> {
+  fn mark_as_read(conn: &PgConnection, form: &Form) -> Result<Self, Error>
+  where
+    Self: Sized;
+  fn mark_as_unread(conn: &PgConnection, form: &Form) -> Result<usize, Error>
+  where
+    Self: Sized;
+}
+
+pub trait Reportable<Form> {
+  fn report(conn: &PgConnection, form: &Form) -> Result<Self, Error>
+  where
+    Self: Sized;
+  fn resolve(conn: &PgConnection, report_id: i32, resolver_id: PersonId) -> Result<usize, Error>
+  where
+    Self: Sized;
+  fn unresolve(conn: &PgConnection, report_id: i32, resolver_id: PersonId) -> Result<usize, Error>
+  where
+    Self: Sized;
+}
+
+pub trait ApubObject<Form> {
+  fn read_from_apub_id(conn: &PgConnection, object_id: &DbUrl) -> Result<Self, Error>
+  where
+    Self: Sized;
+  fn upsert(conn: &PgConnection, user_form: &Form) -> Result<Self, Error>
   where
     Self: Sized;
 }
@@ -216,6 +225,20 @@ pub fn diesel_option_overwrite(opt: &Option<String>) -> Option<Option<String>> {
   }
 }
 
+pub fn diesel_option_overwrite_to_url(
+  opt: &Option<String>,
+) -> Result<Option<Option<DbUrl>>, ApiError> {
+  match opt.as_ref().map(|s| s.as_str()) {
+    // An empty string is an erase
+    Some("") => Ok(Some(None)),
+    Some(str_url) => match Url::parse(str_url) {
+      Ok(url) => Ok(Some(Some(url.into()))),
+      Err(_) => Err(ApiError::err("invalid_url")),
+    },
+    None => Ok(None),
+  }
+}
+
 embed_migrations!();
 
 pub fn establish_unpooled_connection() -> PgConnection {
@@ -228,13 +251,14 @@ pub fn establish_unpooled_connection() -> PgConnection {
   };
   let conn =
     PgConnection::establish(&db_url).unwrap_or_else(|_| panic!("Error connecting to {}", db_url));
-  embedded_migrations::run(&conn).unwrap();
+  embedded_migrations::run(&conn).expect("load migrations");
   conn
 }
 
 lazy_static! {
   static ref EMAIL_REGEX: Regex =
-    Regex::new(r"^[a-zA-Z0-9.!#$%&’*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$").unwrap();
+    Regex::new(r"^[a-zA-Z0-9.!#$%&’*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$")
+      .expect("compile email regex");
 }
 
 pub mod functions {
@@ -247,7 +271,7 @@ pub mod functions {
 
 #[cfg(test)]
 mod tests {
-  use super::fuzzy_search;
+  use super::{fuzzy_search, *};
   use crate::is_email_regex;
 
   #[test]
@@ -260,5 +284,33 @@ mod tests {
   fn test_email() {
     assert!(is_email_regex("gush@gmail.com"));
     assert!(!is_email_regex("nada_neutho"));
+  }
+
+  #[test]
+  fn test_diesel_option_overwrite() {
+    assert_eq!(diesel_option_overwrite(&None), None);
+    assert_eq!(diesel_option_overwrite(&Some("".to_string())), Some(None));
+    assert_eq!(
+      diesel_option_overwrite(&Some("test".to_string())),
+      Some(Some("test".to_string()))
+    );
+  }
+
+  #[test]
+  fn test_diesel_option_overwrite_to_url() {
+    assert!(matches!(diesel_option_overwrite_to_url(&None), Ok(None)));
+    assert!(matches!(
+      diesel_option_overwrite_to_url(&Some("".to_string())),
+      Ok(Some(None))
+    ));
+    assert!(matches!(
+      diesel_option_overwrite_to_url(&Some("invalid_url".to_string())),
+      Err(_)
+    ));
+    let example_url = "https://example.com";
+    assert!(matches!(
+      diesel_option_overwrite_to_url(&Some(example_url.to_string())),
+      Ok(Some(Some(url))) if url == Url::parse(&example_url).unwrap().into()
+    ));
   }
 }

@@ -1,7 +1,7 @@
 use crate::{
   check_is_apub_id_valid,
   extensions::context::lemmy_context,
-  fetcher::user::get_or_fetch_and_upsert_user,
+  fetcher::person::get_or_fetch_and_upsert_person,
   objects::{
     check_object_domain,
     create_tombstone,
@@ -19,12 +19,12 @@ use activitystreams::{
   prelude::*,
 };
 use anyhow::Context;
+use lemmy_api_common::blocking;
 use lemmy_db_queries::{Crud, DbPool};
 use lemmy_db_schema::source::{
+  person::Person,
   private_message::{PrivateMessage, PrivateMessageForm},
-  user::User_,
 };
-use lemmy_structs::blocking;
 use lemmy_utils::{location_info, utils::convert_datetime, LemmyError};
 use lemmy_websocket::LemmyContext;
 use url::Url;
@@ -37,10 +37,10 @@ impl ToApub for PrivateMessage {
     let mut private_message = ApObject::new(Note::new());
 
     let creator_id = self.creator_id;
-    let creator = blocking(pool, move |conn| User_::read(conn, creator_id)).await??;
+    let creator = blocking(pool, move |conn| Person::read(conn, creator_id)).await??;
 
     let recipient_id = self.recipient_id;
-    let recipient = blocking(pool, move |conn| User_::read(conn, recipient_id)).await??;
+    let recipient = blocking(pool, move |conn| Person::read(conn, recipient_id)).await??;
 
     private_message
       .set_many_contexts(lemmy_context()?)
@@ -77,8 +77,16 @@ impl FromApub for PrivateMessage {
     context: &LemmyContext,
     expected_domain: Url,
     request_counter: &mut i32,
+    mod_action_allowed: bool,
   ) -> Result<PrivateMessage, LemmyError> {
-    get_object_from_apub(note, context, expected_domain, request_counter).await
+    get_object_from_apub(
+      note,
+      context,
+      expected_domain,
+      request_counter,
+      mod_action_allowed,
+    )
+    .await
   }
 }
 
@@ -89,6 +97,7 @@ impl FromApubToForm<NoteExt> for PrivateMessageForm {
     context: &LemmyContext,
     expected_domain: Url,
     request_counter: &mut i32,
+    _mod_action_allowed: bool,
   ) -> Result<PrivateMessageForm, LemmyError> {
     let creator_actor_id = note
       .attributed_to()
@@ -97,7 +106,8 @@ impl FromApubToForm<NoteExt> for PrivateMessageForm {
       .single_xsd_any_uri()
       .context(location_info!())?;
 
-    let creator = get_or_fetch_and_upsert_user(&creator_actor_id, context, request_counter).await?;
+    let creator =
+      get_or_fetch_and_upsert_person(&creator_actor_id, context, request_counter).await?;
     let recipient_actor_id = note
       .to()
       .context(location_info!())?
@@ -105,7 +115,7 @@ impl FromApubToForm<NoteExt> for PrivateMessageForm {
       .single_xsd_any_uri()
       .context(location_info!())?;
     let recipient =
-      get_or_fetch_and_upsert_user(&recipient_actor_id, context, request_counter).await?;
+      get_or_fetch_and_upsert_person(&recipient_actor_id, context, request_counter).await?;
     let ap_id = note.id_unchecked().context(location_info!())?.to_string();
     check_is_apub_id_valid(&Url::parse(&ap_id)?)?;
 
@@ -120,7 +130,7 @@ impl FromApubToForm<NoteExt> for PrivateMessageForm {
       deleted: None,
       read: None,
       ap_id: Some(check_object_domain(note, expected_domain)?),
-      local: false,
+      local: Some(false),
     })
   }
 }

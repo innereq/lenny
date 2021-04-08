@@ -1,4 +1,4 @@
-use crate::{APIError, IPAddr, LemmyError};
+use crate::{ApiError, IpAddr, LemmyError};
 use log::debug;
 use std::{collections::HashMap, time::SystemTime};
 use strum::IntoEnumIterator;
@@ -20,19 +20,19 @@ pub(crate) enum RateLimitType {
 /// Rate limiting based on rate type and IP addr
 #[derive(Debug, Clone)]
 pub struct RateLimiter {
-  buckets: HashMap<RateLimitType, HashMap<IPAddr, RateLimitBucket>>,
+  buckets: HashMap<RateLimitType, HashMap<IpAddr, RateLimitBucket>>,
 }
 
 impl Default for RateLimiter {
   fn default() -> Self {
     Self {
-      buckets: HashMap::<RateLimitType, HashMap<IPAddr, RateLimitBucket>>::new(),
+      buckets: HashMap::<RateLimitType, HashMap<IpAddr, RateLimitBucket>>::new(),
     }
   }
 }
 
 impl RateLimiter {
-  fn insert_ip(&mut self, ip: &str) {
+  fn insert_ip(&mut self, ip: &IpAddr) {
     for rate_limit_type in RateLimitType::iter() {
       if self.buckets.get(&rate_limit_type).is_none() {
         self.buckets.insert(rate_limit_type, HashMap::new());
@@ -41,7 +41,7 @@ impl RateLimiter {
       if let Some(bucket) = self.buckets.get_mut(&rate_limit_type) {
         if bucket.get(ip).is_none() {
           bucket.insert(
-            ip.to_string(),
+            ip.clone(),
             RateLimitBucket {
               last_checked: SystemTime::now(),
               allowance: -2f64,
@@ -56,7 +56,7 @@ impl RateLimiter {
   pub(super) fn check_rate_limit_full(
     &mut self,
     type_: RateLimitType,
-    ip: &str,
+    ip: &IpAddr,
     rate: i32,
     per: i32,
     check_only: bool,
@@ -87,7 +87,7 @@ impl RateLimiter {
             rate_limit.allowance
           );
           Err(
-            APIError {
+            ApiError {
               message: format!(
                 "Too many requests. type: {}, IP: {}, {} per {} seconds",
                 type_.as_ref(),

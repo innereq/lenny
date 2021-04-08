@@ -1,4 +1,4 @@
-use crate::{community_moderator_view::CommunityModeratorView, user_view::UserViewSafe};
+use crate::{community_moderator_view::CommunityModeratorView, person_view::PersonViewSafe};
 use diesel::{result::Error, *};
 use lemmy_db_queries::{
   aggregates::community_aggregates::CommunityAggregates,
@@ -12,28 +12,27 @@ use lemmy_db_queries::{
   ViewToVec,
 };
 use lemmy_db_schema::{
-  schema::{category, community, community_aggregates, community_follower, user_},
+  schema::{community, community_aggregates, community_follower, person},
   source::{
-    category::Category,
     community::{Community, CommunityFollower, CommunitySafe},
-    user::{UserSafe, User_},
+    person::{Person, PersonSafe},
   },
+  CommunityId,
+  PersonId,
 };
 use serde::Serialize;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct CommunityView {
   pub community: CommunitySafe,
-  pub creator: UserSafe,
-  pub category: Category,
+  pub creator: PersonSafe,
   pub subscribed: bool,
   pub counts: CommunityAggregates,
 }
 
 type CommunityViewTuple = (
   CommunitySafe,
-  UserSafe,
-  Category,
+  PersonSafe,
   CommunityAggregates,
   Option<CommunityFollower>,
 );
@@ -41,28 +40,26 @@ type CommunityViewTuple = (
 impl CommunityView {
   pub fn read(
     conn: &PgConnection,
-    community_id: i32,
-    my_user_id: Option<i32>,
+    community_id: CommunityId,
+    my_person_id: Option<PersonId>,
   ) -> Result<Self, Error> {
     // The left join below will return None in this case
-    let user_id_join = my_user_id.unwrap_or(-1);
+    let person_id_join = my_person_id.unwrap_or(PersonId(-1));
 
-    let (community, creator, category, counts, follower) = community::table
+    let (community, creator, counts, follower) = community::table
       .find(community_id)
-      .inner_join(user_::table)
-      .inner_join(category::table)
+      .inner_join(person::table)
       .inner_join(community_aggregates::table)
       .left_join(
         community_follower::table.on(
           community::id
             .eq(community_follower::community_id)
-            .and(community_follower::user_id.eq(user_id_join)),
+            .and(community_follower::person_id.eq(person_id_join)),
         ),
       )
       .select((
         Community::safe_columns_tuple(),
-        User_::safe_columns_tuple(),
-        category::all_columns,
+        Person::safe_columns_tuple(),
         community_aggregates::all_columns,
         community_follower::all_columns.nullable(),
       ))
@@ -71,28 +68,35 @@ impl CommunityView {
     Ok(CommunityView {
       community,
       creator,
-      category,
       subscribed: follower.is_some(),
       counts,
     })
   }
 
   // TODO: this function is only used by is_mod_or_admin() below, can probably be merged
-  fn community_mods_and_admins(conn: &PgConnection, community_id: i32) -> Result<Vec<i32>, Error> {
-    let mut mods_and_admins: Vec<i32> = Vec::new();
+  fn community_mods_and_admins(
+    conn: &PgConnection,
+    community_id: CommunityId,
+  ) -> Result<Vec<PersonId>, Error> {
+    let mut mods_and_admins: Vec<PersonId> = Vec::new();
     mods_and_admins.append(
       &mut CommunityModeratorView::for_community(conn, community_id)
         .map(|v| v.into_iter().map(|m| m.moderator.id).collect())?,
     );
-    mods_and_admins
-      .append(&mut UserViewSafe::admins(conn).map(|v| v.into_iter().map(|a| a.user.id).collect())?);
+    mods_and_admins.append(
+      &mut PersonViewSafe::admins(conn).map(|v| v.into_iter().map(|a| a.person.id).collect())?,
+    );
     Ok(mods_and_admins)
   }
 
-  pub fn is_mod_or_admin(conn: &PgConnection, user_id: i32, community_id: i32) -> bool {
+  pub fn is_mod_or_admin(
+    conn: &PgConnection,
+    person_id: PersonId,
+    community_id: CommunityId,
+  ) -> bool {
     Self::community_mods_and_admins(conn, community_id)
       .unwrap_or_default()
-      .contains(&user_id)
+      .contains(&person_id)
   }
 }
 
@@ -100,7 +104,7 @@ pub struct CommunityQueryBuilder<'a> {
   conn: &'a PgConnection,
   listing_type: &'a ListingType,
   sort: &'a SortType,
-  my_user_id: Option<i32>,
+  my_person_id: Option<PersonId>,
   show_nsfw: bool,
   search_term: Option<String>,
   page: Option<i64>,
@@ -111,7 +115,7 @@ impl<'a> CommunityQueryBuilder<'a> {
   pub fn create(conn: &'a PgConnection) -> Self {
     CommunityQueryBuilder {
       conn,
-      my_user_id: None,
+      my_person_id: None,
       listing_type: &ListingType::All,
       sort: &SortType::Hot,
       show_nsfw: true,
@@ -141,8 +145,8 @@ impl<'a> CommunityQueryBuilder<'a> {
     self
   }
 
-  pub fn my_user_id<T: MaybeOptional<i32>>(mut self, my_user_id: T) -> Self {
-    self.my_user_id = my_user_id.get_optional();
+  pub fn my_person_id<T: MaybeOptional<PersonId>>(mut self, my_person_id: T) -> Self {
+    self.my_person_id = my_person_id.get_optional();
     self
   }
 
@@ -158,23 +162,21 @@ impl<'a> CommunityQueryBuilder<'a> {
 
   pub fn list(self) -> Result<Vec<CommunityView>, Error> {
     // The left join below will return None in this case
-    let user_id_join = self.my_user_id.unwrap_or(-1);
+    let person_id_join = self.my_person_id.unwrap_or(PersonId(-1));
 
     let mut query = community::table
-      .inner_join(user_::table)
-      .inner_join(category::table)
+      .inner_join(person::table)
       .inner_join(community_aggregates::table)
       .left_join(
         community_follower::table.on(
           community::id
             .eq(community_follower::community_id)
-            .and(community_follower::user_id.eq(user_id_join)),
+            .and(community_follower::person_id.eq(person_id_join)),
         ),
       )
       .select((
         Community::safe_columns_tuple(),
-        User_::safe_columns_tuple(),
-        category::all_columns,
+        Person::safe_columns_tuple(),
         community_aggregates::all_columns,
         community_follower::all_columns.nullable(),
       ))
@@ -210,7 +212,7 @@ impl<'a> CommunityQueryBuilder<'a> {
     };
 
     query = match self.listing_type {
-      ListingType::Subscribed => query.filter(community_follower::user_id.is_not_null()), // TODO could be this: and(community_follower::user_id.eq(user_id_join)),
+      ListingType::Subscribed => query.filter(community_follower::person_id.is_not_null()), // TODO could be this: and(community_follower::person_id.eq(person_id_join)),
       ListingType::Local => query.filter(community::local.eq(true)),
       _ => query,
     };
@@ -235,9 +237,8 @@ impl ViewToVec for CommunityView {
       .map(|a| Self {
         community: a.0.to_owned(),
         creator: a.1.to_owned(),
-        category: a.2.to_owned(),
-        counts: a.3.to_owned(),
-        subscribed: a.4.is_some(),
+        counts: a.2.to_owned(),
+        subscribed: a.3.is_some(),
       })
       .collect::<Vec<Self>>()
   }

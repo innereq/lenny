@@ -8,14 +8,15 @@ use diesel::{
   PgConnection,
 };
 use lemmy_api::match_websocket_operation;
+use lemmy_api_common::blocking;
+use lemmy_api_crud::match_websocket_operation_crud;
 use lemmy_apub::activity_queue::create_activity_queue;
 use lemmy_db_queries::get_database_url_from_env;
 use lemmy_routes::{feeds, images, nodeinfo, webfinger};
-use lemmy_server::{code_migrations::run_advanced_migrations, scheduled_tasks};
-use lemmy_structs::blocking;
+use lemmy_server::{api_routes, code_migrations::run_advanced_migrations, scheduled_tasks};
 use lemmy_utils::{
   rate_limit::{rate_limiter::RateLimiter, RateLimit},
-  settings::Settings,
+  settings::{defaults::DEFAULT_DATABASE_POOL_SIZE, structs::Settings},
   LemmyError,
 };
 use lemmy_websocket::{chat_server::ChatServer, LemmyContext};
@@ -37,7 +38,12 @@ async fn main() -> Result<(), LemmyError> {
   };
   let manager = ConnectionManager::<PgConnection>::new(&db_url);
   let pool = Pool::builder()
-    .max_size(settings.database.pool_size)
+    .max_size(
+      settings
+        .database()
+        .pool_size
+        .unwrap_or(DEFAULT_DATABASE_POOL_SIZE),
+    )
     .build(manager)
     .unwrap_or_else(|_| panic!("Error connecting to {}", db_url));
 
@@ -61,7 +67,8 @@ async fn main() -> Result<(), LemmyError> {
 
   println!(
     "Starting http server at {}:{}",
-    settings.bind, settings.port
+    settings.bind(),
+    settings.port()
   );
 
   let activity_queue = create_activity_queue();
@@ -69,6 +76,7 @@ async fn main() -> Result<(), LemmyError> {
     pool.clone(),
     rate_limiter.clone(),
     |c, i, o, d| Box::pin(match_websocket_operation(c, i, o, d)),
+    |c, i, o, d| Box::pin(match_websocket_operation_crud(c, i, o, d)),
     Client::default(),
     activity_queue.clone(),
   )
@@ -87,14 +95,14 @@ async fn main() -> Result<(), LemmyError> {
       .wrap(middleware::Logger::default())
       .data(context)
       // The routes
-      .configure(|cfg| lemmy_api::routes::config(cfg, &rate_limiter))
-      .configure(lemmy_apub::routes::config)
+      .configure(|cfg| api_routes::config(cfg, &rate_limiter))
+      .configure(lemmy_apub_receive::routes::config)
       .configure(feeds::config)
       .configure(|cfg| images::config(cfg, &rate_limiter))
       .configure(nodeinfo::config)
       .configure(webfinger::config)
   })
-  .bind((settings.bind, settings.port))?
+  .bind((settings.bind(), settings.port()))?
   .run()
   .await?;
 
